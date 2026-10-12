@@ -1,5 +1,6 @@
 import { afterAll, afterEach, beforeEach, describe, expect, it, mock } from 'bun:test'
 import { installWordImportWorker } from '../../../test-fixtures/wordImportWorker'
+import { createWordIndexedDbMemory } from '../../../test-fixtures/wordIndexedDb'
 import { GlobalRegistrator } from '@happy-dom/global-registrator'
 import { resolve } from 'node:path'
 import type { OfficeFilesAPI } from '../../../../shared/office-files'
@@ -25,8 +26,14 @@ async function waitForElement<T extends Element>(host: HTMLElement, selector: st
   throw new Error(`Timed out waiting for ${selector}`)
 }
 
+const originalIndexedDb = Object.getOwnPropertyDescriptor(window, 'indexedDB')
+let indexed: ReturnType<typeof createWordIndexedDbMemory>
 let restoreWorker: () => void
-beforeEach(() => { restoreWorker = installWordImportWorker() })
+beforeEach(() => {
+  restoreWorker = installWordImportWorker()
+  indexed = createWordIndexedDbMemory()
+  Object.defineProperty(window, 'indexedDB', { configurable: true, value: indexed.factory })
+})
 afterEach(() => {
   restoreWorker()
   window.localStorage.clear()
@@ -34,10 +41,98 @@ afterEach(() => {
 })
 
 afterAll(async () => {
+  if (originalIndexedDb) Object.defineProperty(window, 'indexedDB', originalIndexedDb)
+  else Reflect.deleteProperty(window, 'indexedDB')
   await GlobalRegistrator.unregister()
 })
 
 describe('SessionWordEditor', () => {
+  it('checkpoints edits, tab navigation and host flush without exporting DOCX', async () => {
+    const previousFiles = window.officeFiles
+    const save = mock(async (): ReturnType<OfficeFilesAPI['save']> => ({ ok: true, fileName: 'Report.docx', source: { path: '/work/Report.docx', mtimeMs: 1 } }))
+    window.officeFiles = { save, prepare: async () => ({ path: '/work/Report.docx', mtimeMs: 1 }), inspect: async () => ({ path: '/work/Report.docx', mtimeMs: 1 }), confirmClose: async () => 'cancel' }
+    const host = document.createElement('div')
+    document.body.appendChild(host)
+    const root = createRoot(host)
+    let flush: (() => Promise<void>) | null = null
+    const receiveFlush = (handler: (() => Promise<void>) | null) => { flush = handler }
+    try {
+      await act(async () => root.render(<SessionWordEditor defaultTitle="Report" expanded={false} sessionId="explicit-exports" onFlushHandlerChange={receiveFlush} />))
+      await waitForElement(host, '[data-testid="word-create-document"]')
+      await act(async () => {
+        await window.__bridgicWord!.dispatch({ type: 'document.create', html: '<p>First</p>' })
+        const first = window.__bridgicWord!.workspace.getSnapshot().activeDocumentId
+        await window.__bridgicWord!.dispatch({ type: 'document.append', text: 'Retained workspace edit' })
+        await window.__bridgicWord!.dispatch({ type: 'document.create', title: 'Second' })
+        await window.__bridgicWord!.dispatch({ type: 'document.activate', documentId: first })
+      })
+      await act(async () => { await flush!() })
+      expect(save).not.toHaveBeenCalled()
+      expect(JSON.stringify(indexed.records.get('explicit-exports'))).toContain('Retained workspace edit')
+      await act(async () => { expect((await window.__bridgicWord!.dispatch({ type: 'document.save' })).ok).toBe(true) })
+      expect(save).toHaveBeenCalledTimes(1)
+    } finally {
+      await act(async () => root.unmount())
+      host.remove()
+      window.officeFiles = previousFiles
+    }
+  })
+
+  it('keeps the final tab and host open when the close checkpoint fails', async () => {
+    const host = document.createElement('div')
+    document.body.appendChild(host)
+    const root = createRoot(host)
+    const onClose = mock(() => {})
+    try {
+      await act(async () => root.render(<SessionWordEditor defaultTitle="Retained" expanded={false} sessionId="close-checkpoint-failed" onClose={onClose} />))
+      await waitForElement(host, '[data-testid="word-create-document"]')
+      await act(async () => { await window.__bridgicWord!.dispatch({ type: 'document.create', html: '<p>Keep this content</p>' }) })
+      await waitForElement(host, '[data-testid="word-close-document"]')
+      indexed.state.failWrites = true
+      await act(async () => host.querySelector<HTMLButtonElement>('[data-testid="word-close-document"]')!.click())
+      expect(onClose).not.toHaveBeenCalled()
+      expect(host.querySelectorAll('[data-testid="word-document-tab"]')).toHaveLength(1)
+      const retained = await window.__bridgicWord!.dispatch({ type: 'workspace.get' })
+      expect(JSON.stringify(retained)).toContain('Keep this content')
+      indexed.state.failWrites = false
+      await act(async () => host.querySelector<HTMLButtonElement>('[data-testid="word-close-document"]')!.click())
+      expect(onClose).toHaveBeenCalledTimes(1)
+      expect(indexed.records.get('close-checkpoint-failed')).toMatchObject({ documents: [], activeDocumentId: '' })
+    } finally {
+      await act(async () => root.unmount())
+      host.remove()
+    }
+  })
+
+  it('shows an export failure from panel close while retaining the document', async () => {
+    const previousFiles = window.officeFiles
+    window.officeFiles = {
+      save: async () => { throw new Error('DOCX destination is unavailable') },
+      confirmClose: async () => 'save',
+      prepare: async () => ({ path: '/work/Report.docx', mtimeMs: 1 }),
+      inspect: async () => ({ path: '/work/Report.docx', mtimeMs: 1 }),
+    }
+    const host = document.createElement('div')
+    document.body.appendChild(host)
+    const root = createRoot(host)
+    const onClose = mock(() => {})
+    try {
+      await act(async () => root.render(<SessionWordEditor defaultTitle="Report" expanded={false} sessionId="close-export-failed" onClose={onClose} />))
+      await waitForElement(host, '[data-testid="word-create-document"]')
+      await act(async () => { await window.__bridgicWord!.dispatch({ type: 'document.create', html: '<p>Retained after export failure</p>' }) })
+      await waitForElement(host, '[data-testid="word-close-panel"]')
+      await act(async () => host.querySelector<HTMLButtonElement>('[data-testid="word-close-panel"]')!.click())
+      await waitForElement(host, '[role="alert"]')
+      expect(onClose).not.toHaveBeenCalled()
+      expect(host.querySelectorAll('[data-testid="word-document-tab"]')).toHaveLength(1)
+      expect(Array.from(host.querySelectorAll('[role="alert"]')).some((alert) => alert.textContent?.includes('DOCX destination is unavailable'))).toBe(true)
+    } finally {
+      await act(async () => root.unmount())
+      host.remove()
+      window.officeFiles = previousFiles
+    }
+  })
+
   it('checkpoints a closed final tab as empty and removes only the selected non-final tab', async () => {
     const host = document.createElement('div')
     document.body.appendChild(host)
@@ -76,7 +171,8 @@ describe('SessionWordEditor', () => {
 
     expect(await replaceUniverSnapshotWithRetry({ executeCommand }, 'word-1', { id: 'word-1' } as never)).toBe(true)
     expect(executeCommand).toHaveBeenCalledTimes(2)
-    expect(executeCommand.mock.calls[0]?.[1]).toMatchObject({ textRanges: undefined, options: { noHistory: true } })
+    expect(executeCommand.mock.calls[0]?.[1]).toMatchObject({ textRanges: undefined })
+    expect(executeCommand.mock.calls[0]?.[1]).not.toHaveProperty('options')
     expect(shouldCommitUniverCommand('doc.operation.set-selections')).toBe(false)
     expect(shouldCommitUniverCommand('doc.command.set-zoom-ratio')).toBe(false)
     expect(shouldCommitUniverCommand('doc.command-replace-snapshot')).toBe(false)
@@ -278,6 +374,7 @@ describe('SessionWordEditor', () => {
       await waitUntil(() => Boolean(finishRead))
       await act(async () => {
         expect((await window.__bridgicWord!.dispatch({ type: 'document.append', text: 'Saved during file loading' })).ok).toBe(true)
+        expect((await window.__bridgicWord!.dispatch({ type: 'document.save' })).ok).toBe(true)
       })
       const savedMtime = mtimeMs
       await act(async () => finishRead!())
@@ -295,24 +392,8 @@ describe('SessionWordEditor', () => {
   })
 
   it('retries a failed Word recovery checkpoint without rewriting an already saved document', async () => {
-    const originalStorage = Object.getOwnPropertyDescriptor(window, 'localStorage')
-    const originalIndexed = Object.getOwnPropertyDescriptor(window, 'indexedDB')
     const previousFiles = window.officeFiles
-    const memory = new Map<string, string>()
-    let fail = true
-    let attempts = 0
-    Object.defineProperty(window, 'indexedDB', { configurable: true, value: undefined })
-    Object.defineProperty(window, 'localStorage', { configurable: true, value: {
-      getItem: (key: string) => memory.get(key) ?? null,
-      removeItem: (key: string) => memory.delete(key),
-      setItem: (key: string, value: string) => {
-        if (key.startsWith('bridgic.word.workspace.')) {
-          attempts++
-          if (fail) throw new Error('Temporary recovery storage failure')
-        }
-        memory.set(key, value)
-      },
-    } })
+    indexed.state.failWrites = true
     const save = mock(async (): ReturnType<OfficeFilesAPI['save']> => ({ ok: true, fileName: 'Report.docx', source: { path: '/work/Report.docx', mtimeMs: 1 } }))
     window.officeFiles = { save, prepare: async () => ({ path: '/work/Report.docx', mtimeMs: 1 }), inspect: async () => ({ path: '/work/Report.docx', mtimeMs: 1 }), confirmClose: async () => 'cancel' }
     const host = document.createElement('div')
@@ -323,27 +404,23 @@ describe('SessionWordEditor', () => {
       await waitForElement(host, '[data-testid="word-create-document"]')
       await act(async () => { await window.__bridgicWord!.dispatch({ type: 'document.create', html: '<p>Saved content</p>' }) })
       await waitForElement(host, '[data-testid="word-document-header"] [role="alert"]')
-      const before = attempts
+      const before = indexed.writes.length
       const writes = save.mock.calls.length
       const retry = Array.from(host.querySelectorAll<HTMLButtonElement>('button')).find((button) => button.textContent === i18n.t('word.retry'))!
       expect(retry).toBeDefined()
       // A still-failing retry must remain visibly failed.
       await act(async () => { retry.click(); await new Promise((resolve) => setTimeout(resolve, 10)) })
-      expect(attempts).toBeGreaterThan(before)
+      expect(indexed.writes.length).toBeGreaterThan(before)
       expect(host.querySelector('[data-testid="word-document-header"] [role="alert"]')).not.toBeNull()
-      fail = false
+      indexed.state.failWrites = false
       await act(async () => { retry.click(); await new Promise((resolve) => setTimeout(resolve, 10)) })
-      expect(memory.get('bridgic.word.workspace.retry-checkpoint')).toContain('Saved content')
+      expect(JSON.stringify(indexed.records.get('retry-checkpoint'))).toContain('Saved content')
       expect(host.querySelector('[data-testid="word-document-header"] [role="alert"]')).toBeNull()
       expect(save).toHaveBeenCalledTimes(writes)
     } finally {
       await act(async () => root.unmount())
       host.remove()
       window.officeFiles = previousFiles
-      if (originalStorage) Object.defineProperty(window, 'localStorage', originalStorage)
-      else Reflect.deleteProperty(window, 'localStorage')
-      if (originalIndexed) Object.defineProperty(window, 'indexedDB', originalIndexed)
-      else Reflect.deleteProperty(window, 'indexedDB')
     }
   })
 

@@ -1,5 +1,6 @@
-import { afterAll, describe, expect, it } from 'bun:test'
+import { afterAll, describe, expect, it, mock, spyOn } from 'bun:test'
 import { GlobalRegistrator } from '@happy-dom/global-registrator'
+import { CustomRangeType, ListGlyphType, PRESET_LIST_TYPE } from '@univerjs/core'
 
 GlobalRegistrator.register()
 
@@ -8,17 +9,301 @@ const {
   createEmptyWordWorkspace,
   createWordDomainStore,
   createWordWorkspace,
+  isWordDocumentDirty,
   reduceWordCommand,
   restoreWordWorkspace,
   sanitizeWordHtml,
 } = await import('../wordDomain')
-const { createUniverDocumentSnapshot, getUniverDocumentText, insertReferenceInSnapshot } = await import('../wordUniverModel')
+const { createUniverDocumentSnapshot, createUniverSectionedDocumentSnapshot, getUniverDocumentText, htmlToUniverSnapshot, insertReferenceInSnapshot } = await import('../wordUniverModel')
 
 afterAll(async () => {
   await GlobalRegistrator.unregister()
 })
 
 describe('Word renderer domain', () => {
+  it('replaces HTML body assets without aliasing native segments or retaining removed body resources', async () => {
+    const image = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Wl6T4cAAAAASUVORK5CYII='
+    const random = spyOn(Math, 'random').mockReturnValue(0.25)
+    const native = htmlToUniverSnapshot(`<p>Old body<img src="${image}"/><a href="https://old.example">Old link</a></p><table><tr><td>Old table</td></tr></table><ol><li>Old list</li></ol>`, 'native-rich-parts', 'Report')
+    const oldDrawingId = native.body!.customBlocks![0]!.blockId
+    const oldTableId = native.body!.tables![0]!.tableId
+    const oldListId = native.body!.paragraphs!.find((paragraph) => paragraph.bullet)!.bullet!.listId
+    random.mockReturnValue(0.5)
+    const part = htmlToUniverSnapshot(`<p>Brand<img src="${image}" width="80" height="20"/><a href="https://brand.example">Brand link</a><sup data-word-footnote-id="shared-note" data-word-footnote-text="Header note">1</sup></p><table><tr><td>Header table</td></tr></table><ol><li>Custom native list</li><li>Native preset override</li></ol><ul><li>Native fallback bullet</li></ul>`, native.id, native.title!)
+    const nativeList = part.body!.paragraphs!.find((paragraph) => paragraph.bullet)!.bullet!
+    nativeList.listType = 'CUSTOM_NATIVE'
+    part.lists!.CUSTOM_NATIVE = { ...structuredClone(PRESET_LIST_TYPE.ORDER_LIST!), listType: 'CUSTOM_NATIVE' }
+    part.lists!.CUSTOM_NATIVE.nestingLevel[0]!.startNumber = 23
+    part.lists!.ORDER_LIST = { ...structuredClone(PRESET_LIST_TYPE.ORDER_LIST!), listType: 'ORDER_LIST' }
+    part.lists!.ORDER_LIST.nestingLevel[0]!.startNumber = 17
+    for (const key of ['drawings', 'tableSource', 'lists'] as const) Object.assign(native[key]!, part[key])
+    const retainedDrawingId = part.body!.customBlocks![0]!.blockId
+    native.drawingsOrder!.push(retainedDrawingId)
+    native.headerFooterDrawingsOrder = [retainedDrawingId]
+    native.headers = { brand: { headerId: 'brand', body: part.body! }, blank: { headerId: 'blank', body: htmlToUniverSnapshot('<p><br></p>', native.id, '').body! } }
+    native.footers = { shared: { footerId: 'shared', body: structuredClone(part.body!) } }
+    native.documentStyle = {
+      ...native.documentStyle, pageSize: { width: 1200, height: 700 }, pageOrient: 1,
+      marginTop: 41, marginBottom: 43, marginLeft: 47, marginRight: 53,
+      defaultHeaderId: 'brand', firstPageHeaderId: 'blank', evenPageHeaderId: 'blank',
+      defaultFooterId: 'shared', useFirstPageHeaderFooter: 1, evenAndOddHeaders: 1, pageNumberStart: 6,
+    }
+    native.resources = [
+      { name: 'DOC_DRAWING_PLUGIN', data: JSON.stringify({ oldDrawingId }) },
+      { name: 'DOC_HYPER_LINK_PLUGIN', data: JSON.stringify({ oldLink: 'https://old.example' }) },
+      { name: 'CUSTOM_PLUGIN', data: 'preserved' },
+    ]
+    const store = createWordDomainStore(createEmptyWordWorkspace('replace-rich-parts'), { defaultTitle: 'Report' })
+    try {
+      expect((await store.dispatch({ type: 'document.create', snapshot: native })).ok).toBe(true)
+      const before = store.getSnapshot().documents[0]!
+      const beforeSnapshot = structuredClone(before.snapshot)
+      const html = `<h1>Replacement</h1><p><img src="${image}" width="24" height="12"/><a href="https://new.example">New link</a><sup data-word-footnote-id="shared-note" data-word-footnote-text="Replacement note">1</sup><span data-word-citation-id="new-citation" data-word-citation-text="Author, 2026">Author</span></p><table><tr><td>Replacement table</td></tr></table><ol><li>Outer number<ul><li>Inner bullet</li></ul></li><li>Second number</li></ol>`
+      expect((await store.dispatch({ type: 'document.update', html })).ok).toBe(true)
+      const updated = store.getSnapshot().documents[0]!
+      expect(before.snapshot).toEqual(beforeSnapshot)
+      expect(updated.snapshot.documentStyle).toEqual(beforeSnapshot.documentStyle)
+      expect(updated.snapshot.headers).toEqual(beforeSnapshot.headers)
+      expect(updated.snapshot.footers).toEqual(beforeSnapshot.footers)
+      expect(updated.page).toEqual(before.page)
+      expect(updated.headerFooter).toEqual(before.headerFooter)
+      expect(updated.snapshot.drawings![oldDrawingId]).toBeUndefined()
+      expect(updated.snapshot.tableSource![oldTableId]).toBeUndefined()
+      expect(updated.snapshot.lists![oldListId]).toBeUndefined()
+      expect(updated.snapshot.drawings![retainedDrawingId]).toEqual(beforeSnapshot.drawings![retainedDrawingId])
+      for (const [id, table] of Object.entries(part.tableSource!)) expect(updated.snapshot.tableSource![id]).toEqual(table)
+      for (const [id, list] of Object.entries(part.lists!)) expect(updated.snapshot.lists![id]).toEqual(list)
+      const body = updated.snapshot.body!
+      const bodyDrawing = body.customBlocks![0]!.blockId
+      const bodyTable = body.tables![0]!.tableId
+      expect(bodyDrawing).not.toBe(retainedDrawingId)
+      expect(updated.snapshot.drawings![bodyDrawing]!.drawingId).toBe(bodyDrawing)
+      expect(updated.snapshot.drawings![bodyDrawing]!.docTransform!.size).toEqual({ width: 24, height: 12 })
+      expect(Object.keys(part.tableSource!)).not.toContain(bodyTable)
+      expect(updated.snapshot.tableSource![bodyTable]!.tableId).toBe(bodyTable)
+      expect(updated.snapshot.drawingsOrder).toEqual([retainedDrawingId, bodyDrawing])
+      expect(updated.snapshot.headerFooterDrawingsOrder).toEqual([retainedDrawingId])
+      const bullets = body.paragraphs!.flatMap((paragraph) => paragraph.bullet ? [paragraph.bullet] : [])
+      expect(bullets).toHaveLength(3)
+      expect(bullets[0]!.listId).toBe(bullets[2]!.listId)
+      expect(bullets[1]!.listId).not.toBe(bullets[0]!.listId)
+      expect(bullets[0]!.listId).not.toBe(nativeList.listId)
+      expect(bullets[0]!.listType).not.toBe('ORDER_LIST')
+      expect(bullets[1]!.listType).not.toBe('BULLET_LIST')
+      expect(updated.snapshot.lists!.BULLET_LIST).toBeUndefined()
+      expect(updated.snapshot.lists![bullets[0]!.listType]!.nestingLevel[0]).toMatchObject({ glyphType: ListGlyphType.DECIMAL, startNumber: PRESET_LIST_TYPE.ORDER_LIST!.nestingLevel[0]!.startNumber })
+      expect(updated.snapshot.lists![bullets[1]!.listType]!.nestingLevel[1]!.glyphSymbol).toBeTruthy()
+      expect(body.customRanges!.find((range) => range.rangeType === CustomRangeType.HYPERLINK)!.properties!.url).toBe('https://new.example')
+      expect(updated.footnotes).toEqual([{ id: 'shared-note-body', number: 1, text: 'Replacement note' }])
+      expect(updated.citations).toEqual([{ id: 'new-citation', text: 'Author, 2026' }])
+      expect(body.customRanges!.find((range) => range.properties?.bridgicKind === 'footnote')!.rangeId).toBe(updated.footnotes[0]!.id)
+      expect(updated.snapshot.resources).toEqual([{ name: 'CUSTOM_PLUGIN', data: 'preserved' }])
+      expect(store.commitEditorSnapshot(updated.id, beforeSnapshot)).toBe(true)
+      expect(store.getSnapshot().documents[0]!.snapshot).toEqual(beforeSnapshot)
+      expect(store.commitEditorSnapshot(updated.id, updated.snapshot)).toBe(true)
+      expect(store.getSnapshot().documents[0]!.footnotes).toEqual(updated.footnotes)
+    } finally { random.mockRestore(); store.dispose() }
+  })
+
+  it('moves native main section styles onto replacement boundaries without applying them to table cells', async () => {
+    const page = { size: 'a4', orientation: 'portrait', margins: 'normal' } as const
+    const headerFooter = { headerHtml: '', footerHtml: '', showPageNumbers: false, differentFirstPage: false, pageNumberStart: 1 }
+    for (const sectionCount of [1, 2]) {
+      const native = createUniverSectionedDocumentSnapshot('sections', 'Report', page, headerFooter, [
+        { html: '<table><tr><td>Old cell</td></tr></table><p>First section</p>', style: { pageSize: { width: 1200, height: 700 }, marginLeft: 47, pageNumberStart: 6, defaultHeaderId: 'section-header', sectionType: 0 }, parts: [{ kind: 'header', variant: 'default', id: 'section-header', html: '<p>Section brand</p>' }] },
+        ...(sectionCount === 2 ? [{ html: '<p>Second section</p>', style: { pageSize: { width: 600, height: 900 }, marginLeft: 29, pageNumberStart: 11 }, parts: [] }] : []),
+      ])
+      const store = createWordDomainStore(createEmptyWordWorkspace(`replace-sections-${sectionCount}`), { defaultTitle: 'Report' })
+      try {
+        expect((await store.dispatch({ type: 'document.create', snapshot: native })).ok).toBe(true)
+        const before = store.getSnapshot().documents[0]!.snapshot
+        const first = before.body!.sectionBreaks!.find((section) => section.defaultHeaderId === 'section-header')!
+        expect((await store.dispatch({ type: 'document.update', html: '<p>New shorter content</p><table><tr><td>New cell</td></tr></table>' })).ok).toBe(true)
+        const updated = store.getSnapshot().documents[0]!.snapshot
+        const body = updated.body!
+        expect(updated.documentStyle).toEqual(before.documentStyle)
+        expect(updated.headers).toEqual(before.headers)
+        expect(body.sectionBreaks!.at(-1)).toEqual({ ...first, startIndex: body.dataStream.length - 1 })
+        expect(body.sectionBreaks!.at(-1)!.startIndex).not.toBe(first.startIndex)
+        const cellSections = body.sectionBreaks!.slice(0, -1)
+        expect(cellSections).toHaveLength(1)
+        expect(cellSections[0]!.pageSize).toBeUndefined()
+        expect(cellSections[0]!.defaultHeaderId).toBeUndefined()
+      } finally { store.dispose() }
+    }
+  })
+
+  it('derives all page and header/footer controls when creating a native document', async () => {
+    const page = { size: 'letter', orientation: 'landscape', margins: 'narrow' } as const
+    const native = createUniverDocumentSnapshot('external', 'External', page, {
+      headerHtml: '<p>Native header</p>', footerHtml: '<p>Native footer</p>',
+      showPageNumbers: true, differentFirstPage: true, pageNumberStart: 9,
+    }, '<p>Native body</p>')
+    const store = createWordDomainStore(createEmptyWordWorkspace('native-create'), { defaultTitle: 'Report' })
+    try {
+      expect((await store.dispatch({ type: 'document.create', snapshot: native })).ok).toBe(true)
+      const created = store.getSnapshot().documents[0]!
+      expect(created.page).toEqual(page)
+      expect(created.headerFooter).toMatchObject({ showPageNumbers: true, differentFirstPage: true, pageNumberStart: 9 })
+      expect(created.headerFooter.headerHtml).toContain('Native header')
+      expect(created.headerFooter.footerHtml).toContain('Native footer')
+      expect(created.snapshot.documentStyle).toEqual(native.documentStyle)
+      await store.dispatch({ type: 'document.headerFooter.update', settings: { showPageNumbers: false } })
+      const updated = store.getSnapshot().documents[0]!
+      expect(updated.snapshot.documentStyle).toMatchObject({ pageNumberStart: 9, useFirstPageHeaderFooter: 1, bridgicShowPageNumbers: false })
+      expect(updated.snapshot.headers).toEqual(native.headers)
+      expect(updated.snapshot.footers).toEqual(native.footers)
+    } finally { store.dispose() }
+  })
+
+  it('updates native geometry and removed segments without restoring cached settings', async () => {
+    const store = createWordDomainStore(createWordWorkspace('native-update', 'Report'), { defaultTitle: 'Report' })
+    try {
+      await store.dispatch({ type: 'document.headerFooter.update', settings: { headerHtml: '<p>Old header</p>', footerHtml: '<p>Old footer</p>' } })
+      const document = store.getSnapshot().documents[0]!
+      const native = structuredClone(document.snapshot)
+      native.headers = {}
+      native.footers = {}
+      native.documentStyle = {
+        ...native.documentStyle,
+        pageSize: { width: 1200, height: 700 }, pageOrient: 1,
+        marginTop: 41, marginBottom: 43, marginLeft: 47, marginRight: 53,
+        defaultHeaderId: '', defaultFooterId: '', useFirstPageHeaderFooter: 1, pageNumberStart: 7,
+      }
+      native.body!.sectionBreaks = [{ startIndex: native.body!.dataStream.length - 1, pageSize: { width: 600, height: 900 }, marginLeft: 29 }]
+      expect((await store.dispatch({ type: 'document.update', snapshot: native })).ok).toBe(true)
+      const updated = store.getSnapshot().documents[0]!
+      expect(updated.snapshot.documentStyle).toEqual(native.documentStyle)
+      expect(updated.snapshot.body!.sectionBreaks).toEqual(native.body!.sectionBreaks)
+      expect(updated.snapshot.headers).toEqual({})
+      expect(updated.snapshot.footers).toEqual({})
+      expect(updated.page.orientation).toBe('landscape')
+      expect(updated.headerFooter).toMatchObject({ headerHtml: '', footerHtml: '', differentFirstPage: true, pageNumberStart: 7 })
+      await store.dispatch({ type: 'document.headerFooter.update', settings: { showPageNumbers: true } })
+      expect(store.getSnapshot().documents[0]!.snapshot.documentStyle).toMatchObject({ pageNumberStart: 7, useFirstPageHeaderFooter: 1 })
+      expect(store.getSnapshot().documents[0]!.snapshot.headers).toEqual({})
+      expect(store.getSnapshot().documents[0]!.snapshot.footers).toEqual({})
+    } finally { store.dispose() }
+  })
+
+  it('retains imported HTML and layout when the import has no valid native snapshot', async () => {
+    for (const snapshot of [undefined, { body: {} }]) {
+      const store = createWordDomainStore(createEmptyWordWorkspace('html-import'), { defaultTitle: 'Report' })
+      try {
+        const page = { size: 'letter', orientation: 'landscape', margins: 'narrow' } as const
+        expect((await store.dispatch({
+          type: 'document.open', title: 'Report.docx', html: '<p>Imported body</p>', sourcePath: '/Report.docx', sourceMtimeMs: 1,
+          document: { snapshot, page, headerFooter: { headerHtml: '<p>Imported header</p>', showPageNumbers: true, pageNumberStart: 4 } },
+        })).ok).toBe(true)
+        const imported = store.getSnapshot().documents[0]!
+        expect(getUniverDocumentText(imported.snapshot)).toContain('Imported body')
+        expect(imported.page).toEqual(page)
+        expect(imported.headerFooter).toMatchObject({ headerHtml: '<p>Imported header</p>', showPageNumbers: true, pageNumberStart: 4 })
+        expect(imported.snapshot.headers![imported.snapshot.documentStyle.defaultHeaderId!]!.body.dataStream).toContain('Imported header')
+      } finally { store.dispose() }
+    }
+  })
+
+  it('derives numbering controls from native snapshots during update, commit and restore', async () => {
+    const store = createWordDomainStore(createWordWorkspace('native-numbering', 'Report'), { defaultTitle: 'Report' })
+    try {
+      const before = structuredClone(store.getSnapshot().documents[0]!.snapshot)
+      await store.dispatch({ type: 'document.headerFooter.update', settings: { showPageNumbers: true, pageNumberStart: 3 } })
+      expect(store.getSnapshot().documents[0]!.headerFooter.showPageNumbers).toBe(true)
+      const enabled = structuredClone(store.getSnapshot().documents[0]!.snapshot)
+      expect(store.commitEditorSnapshot(before.id, before)).toBe(true)
+      expect(store.getSnapshot().documents[0]!.headerFooter).toMatchObject({ showPageNumbers: false, pageNumberStart: 1 })
+      const restored = structuredClone(store.getSnapshot())
+      restored.documents[0]!.headerFooter.showPageNumbers = true
+      expect(restoreWordWorkspace(restored, restored.sessionId, 'Report').documents[0]!.headerFooter.showPageNumbers).toBe(false)
+      await store.dispatch({ type: 'document.update', snapshot: enabled })
+      expect(store.getSnapshot().documents[0]!.headerFooter.showPageNumbers).toBe(true)
+      await store.dispatch({ type: 'document.create', title: 'Native numbered document', snapshot: enabled })
+      expect(store.getSnapshot().documents[1]!.headerFooter.showPageNumbers).toBe(true)
+      await store.dispatch({ type: 'document.headerFooter.update', settings: { pageNumberStart: 2 } })
+      expect(store.getSnapshot().documents[1]!.headerFooter).toMatchObject({ showPageNumbers: true, pageNumberStart: 2 })
+      expect(store.getSnapshot().documents[1]!.snapshot.documentStyle).toMatchObject({ bridgicShowPageNumbers: true })
+    } finally { store.dispose() }
+  })
+
+  it('preserves native custom geometry and removed parts through commit and current workspace restore', () => {
+    const initial = createWordWorkspace('custom-layout', 'Current title')
+    const document = initial.documents[0]!
+    document.sourcePath = '/tmp/current.docx'
+    document.sourceMtimeMs = 42
+    document.sourceProtected = false
+    document.contentVersion = 8
+    document.savedContentVersion = 7
+    document.page = { size: 'letter', orientation: 'portrait', margins: 'wide' }
+    document.headerFooter.headerHtml = '<p>Stale removed header</p>'
+    document.headerFooter.footerHtml = '<p>Stale removed footer</p>'
+    document.headerFooter.differentFirstPage = false
+    document.headerFooter.pageNumberStart = 1
+    document.headerFooter.showPageNumbers = true
+    document.snapshot.documentStyle = {
+      ...document.snapshot.documentStyle,
+      pageSize: { width: 1200, height: 700 },
+      pageOrient: 1,
+      marginTop: 41,
+      marginBottom: 43,
+      marginLeft: 47,
+      marginRight: 53,
+      marginHeader: 19,
+      marginFooter: 23,
+      useFirstPageHeaderFooter: 1,
+      pageNumberStart: 6,
+    }
+    document.snapshot.body!.sectionBreaks = [{
+      startIndex: document.snapshot.body!.dataStream.length - 1,
+      pageSize: { width: 600, height: 900 },
+      pageOrient: 0,
+      marginLeft: 29,
+      marginRight: 31,
+    }]
+    const expectedSections = structuredClone(document.snapshot.body!.sectionBreaks)
+    const store = createWordDomainStore(initial, { defaultTitle: 'Report' })
+    try {
+      const restored = store.getSnapshot().documents[0]!
+      expect(restored.snapshot.documentStyle).toEqual(document.snapshot.documentStyle)
+      expect(restored.snapshot.body!.sectionBreaks).toEqual(expectedSections)
+      expect(restored.page).toEqual({ size: 'letter', orientation: 'landscape', margins: 'wide' })
+      expect(restored.headerFooter).toMatchObject({
+        headerHtml: '', footerHtml: '', differentFirstPage: true, pageNumberStart: 6, showPageNumbers: false,
+      })
+
+      const native = structuredClone(restored.snapshot)
+      native.id = 'old-native-identity'
+      native.title = 'Old native title'
+      native.documentStyle.marginTop = 37
+      native.documentStyle.marginLeft = 39
+      native.documentStyle.pageOrient = 0
+      native.documentStyle.useFirstPageHeaderFooter = 0
+      native.documentStyle.pageNumberStart = 2
+      expect(store.commitEditorSnapshot(document.id, native)).toBe(true)
+      const committed = store.getSnapshot().documents[0]!
+      expect(committed).toMatchObject({
+        id: document.id,
+        title: 'Current title',
+        sourcePath: '/tmp/current.docx',
+        sourceMtimeMs: 42,
+        sourceProtected: false,
+        contentVersion: 9,
+        savedContentVersion: 7,
+        page: { orientation: 'portrait' },
+        headerFooter: { headerHtml: '', footerHtml: '', differentFirstPage: false, pageNumberStart: 2 },
+      })
+      expect(committed.snapshot.id).toBe(document.id)
+      expect(committed.snapshot.title).toBe('Current title')
+      expect(committed.snapshot.documentStyle).toEqual(native.documentStyle)
+      expect(committed.snapshot.body!.sectionBreaks).toEqual(expectedSections)
+
+      const reopened = restoreWordWorkspace(store.getSnapshot(), 'custom-layout', 'Report').documents[0]!
+      expect(reopened).toEqual(committed)
+      expect(Object.keys(reopened.snapshot.headers ?? {})).toEqual([])
+      expect(Object.keys(reopened.snapshot.footers ?? {})).toEqual([])
+    } finally { store.dispose() }
+  })
+
   it('keeps unchanged and untargeted native header/footer content intact', async () => {
     const store = createWordDomainStore(createWordWorkspace('rich-parts', 'Report'), { defaultTitle: 'Report' })
     try {
@@ -93,6 +378,59 @@ describe('Word renderer domain', () => {
     expect(closed.ok).toBe(true)
     if (!closed.ok) return
     expect(closed.state).toMatchObject({ activeDocumentId: '', documents: [] })
+  })
+
+  it('reuses an unchanged source from the public API without resetting live edits or reading unused images', async () => {
+    const store = createWordDomainStore(createEmptyWordWorkspace('word-repeat-open'), { defaultTitle: 'Report' })
+    const open = { type: 'document.open', title: 'Report.docx', html: '<p>On disk</p>', sourcePath: '/work/Report.docx', sourceMtimeMs: 1, sourceProtected: false }
+    const previousFiles = window.officeFiles
+    const readImage = mock(async () => { throw new Error('Unused import image is unavailable') })
+    window.officeFiles = {
+      inspect: async () => ({ path: open.sourcePath, mtimeMs: 1 }),
+      save: async () => ({ ok: false, reason: 'canceled' }),
+      confirmClose: async () => 'cancel',
+      readImage,
+    }
+    try {
+      expect((await store.api.dispatch(open)).ok).toBe(true)
+      const id = store.getSnapshot().activeDocumentId
+      expect((await store.api.dispatch({ type: 'document.append', text: 'Unsaved live edit' })).ok).toBe(true)
+      const live = store.getSnapshot().documents[0]!
+      const revision = store.api.workspace.getSnapshot().documents[0]!.revision
+      const reopen = { ...open, title: 'Unused title', html: '<p>Old bytes<img src="https://example.com/unused.png"/></p>', sourceProtected: true }
+      expect((await store.api.dispatch(reopen)).ok).toBe(true)
+      expect(store.getSnapshot().documents[0]).toBe(live)
+      expect(store.api.workspace.getSnapshot().documents[0]!.revision).toBe(revision)
+      expect((await store.api.dispatch({ type: 'document.create', title: 'Other tab' })).ok).toBe(true)
+      expect((await store.api.dispatch(reopen)).ok).toBe(true)
+      expect(store.getSnapshot().activeDocumentId).toBe(id)
+      expect(store.getSnapshot().documents).toHaveLength(2)
+      expect(store.getSnapshot().documents[0]).toBe(live)
+      expect(isWordDocumentDirty(live)).toBe(true)
+      expect(getUniverDocumentText(live.snapshot)).toContain('Unsaved live edit')
+      expect(readImage).not.toHaveBeenCalled()
+    } finally { window.officeFiles = previousFiles; store.dispose() }
+  })
+
+  it('flushes pending native input before rejecting a changed source', async () => {
+    const store = createWordDomainStore(createEmptyWordWorkspace('word-open-native-flush'), { defaultTitle: 'Report' })
+    const open = { type: 'document.open', title: 'Report.docx', html: '<p>On disk</p>', sourcePath: '/work/Report.docx', sourceMtimeMs: 1 }
+    try {
+      expect((await store.dispatch(open)).ok).toBe(true)
+      const id = store.getSnapshot().activeDocumentId
+      const native = htmlToUniverSnapshot('<p>Pending native typing</p>', id, 'Report.docx')
+      const flush = mock(async () => { store.commitEditorSnapshot(id, native) })
+      store.registerEditorCommandHandler(id, async () => true, flush)
+      const changed = await store.api.dispatch({ ...open, sourceMtimeMs: 2, html: '<p>External content</p>' })
+      expect(changed).toMatchObject({ ok: false, error: { code: 'source_conflict' } })
+      expect(flush).toHaveBeenCalledTimes(1)
+      expect(getUniverDocumentText(store.getSnapshot().documents[0]!.snapshot)).toContain('Pending native typing')
+      expect(store.getSnapshot().documents[0]!.sourceMtimeMs).toBe(1)
+      expect(isWordDocumentDirty(store.getSnapshot().documents[0]!)).toBe(true)
+      const reused = await store.api.dispatch(open)
+      expect(reused.ok).toBe(true)
+      expect(isWordDocumentDirty(store.getSnapshot().documents[0]!)).toBe(true)
+    } finally { store.dispose() }
   })
 
   it('opens a DOCX source once and refreshes the same tab when the source changes', async () => {
@@ -196,7 +534,7 @@ describe('Word renderer domain', () => {
     expect(restored.documents).toHaveLength(0)
   })
 
-  it('migrates same-Session v1 HTML documents to native Univer snapshots', () => {
+  it('rejects obsolete same-Session HTML workspaces instead of migrating them', () => {
     const restored = restoreWordWorkspace({
       version: 1,
       sessionId: 'session-word',
@@ -215,9 +553,8 @@ describe('Word renderer domain', () => {
     }, 'session-word', 'Untitled document')
 
     expect(restored.version).toBe(2)
-    expect(getUniverDocumentText(restored.documents[0]!.snapshot)).toContain('Imported heading')
-    expect(restored.documents[0]?.snapshot.documentStyle.pageOrient).toBe(1)
-    expect(restored.documents[0]?.snapshot.headers?.['bridgic-word-header']?.body.dataStream).toContain('Header')
+    expect(restored.documents).toEqual([])
+    expect(restored.activeDocumentId).toBe('')
   })
 
   it('counts CJK characters and whitespace-delimited words', () => {

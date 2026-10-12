@@ -10,6 +10,7 @@ import { createPresentationFileController, isPresentationProjectDirty } from '@/
 import type { OfficeEditorBinding } from '@/lib/office/officeEditorBinding'
 import type { WorkspacePersistence } from '@/lib/office/workspacePersistence'
 import { createOfficeWorkspaceRuntime } from '@/lib/office/officeWorkspaceRuntime'
+import { resolveOfficeSourceOpen } from '@/lib/office/officeSourceOpen'
 import { i18n } from '@/lib/i18n'
 import {
   executePowerPointRequest,
@@ -149,13 +150,19 @@ export class PresentationStore {
       commitExport: async (projectId, _fileName, source, exportedRevision) => {
         const exported = this.state.projects.find((project) => project.id === projectId)
         const exportedMetadata = this.state.projectMetadata[projectId]
-        let rebased = exported
+        let rebased: PresentationProject | undefined
         if (exported && exportedMetadata?.revision === exportedRevision && this.options.files.readBase64) {
           const materialized = await materializePresentationProjectSources(exported, this.state.sources)
           const encoded = await this.options.files.readBase64('presentation', source.path)
           const result = await rebasePresentationPptxSources(exported, materialized, encoded)
-          rebased = result.project
-          if (result.replacements.size) this.replaceHistorySources(projectId, result.replacements)
+          await this.flushEditor()
+          // Native input remains editable during source IO. Rebase only the exact
+          // exported model; newer live contents and their history must survive.
+          if (this.state.projects.find((project) => project.id === projectId) === exported
+            && this.state.projectMetadata[projectId]?.revision === exportedRevision) {
+            rebased = result.project
+            if (result.replacements.size) this.replaceHistorySources(projectId, result.replacements)
+          }
         }
         const projectMetadata = Object.fromEntries(Object.entries(this.state.projectMetadata).map(([id, current]) => {
           let next = current
@@ -366,6 +373,38 @@ export class PresentationStore {
     return this.state.projectMetadata[projectId]?.revision === metadata.revision
   }
 
+  private async persistClosedWorkspace(next: PresentationWorkspace): Promise<boolean> {
+    const approved = this.workspace()
+    const inventoryMatches = (workspace: PresentationWorkspace) => this.state.activeProjectId === workspace.activeProjectId
+      && this.state.projects.length === workspace.projects.length
+      && this.state.projects.every((project, index) => project.id === workspace.projects[index]?.id
+        && this.state.projectMetadata[project.id]?.revision === workspace.projectMetadata[project.id]?.revision)
+    const restoreInventory = async (flushEditor: boolean) => {
+      let retained: PresentationWorkspace
+      do {
+        retained = this.workspace()
+        await this.options.workspacePersistence.persist(retained)
+        if (flushEditor) await this.flushEditor()
+        this.officeRuntime.assertCurrent({ sessionId: this.sessionId, capability: 'document.close' })
+      } while (!inventoryMatches(retained))
+    }
+    try {
+      await this.options.workspacePersistence.persist(next)
+      await this.flushEditor()
+      this.officeRuntime.assertCurrent({ sessionId: this.sessionId, capability: 'document.close' })
+      if (!inventoryMatches(approved)) {
+        await restoreInventory(true)
+        return false
+      }
+      this.replaceInventory(next.activeProjectId, next.projects, next.projectMetadata, false)
+      return true
+    } catch (error) {
+      // A completed checkpoint must not remove live projects after a failed native flush.
+      await restoreInventory(false)
+      throw error
+    }
+  }
+
   async closeProject(projectId: string): Promise<{ closeSurface: boolean }> {
     const result = await this.officeRuntime.execute({ sessionId: this.sessionId, capability: 'document.close', documentId: projectId }, async (context) => {
       if (!await this.prepareClose(projectId)) return { closeSurface: false }
@@ -375,7 +414,10 @@ export class PresentationStore {
       const activeProjectId = this.state.activeProjectId === projectId
         ? projects[Math.min(index, projects.length - 1)]?.id ?? ''
         : this.state.activeProjectId
-      this.replaceInventory(activeProjectId, projects, this.state.projectMetadata)
+      const projectMetadata = Object.fromEntries(projects.map((project) => [project.id, this.metadataOf(project.id)]))
+      if (!await this.persistClosedWorkspace({ schemaVersion: 1, activeProjectId, projects, projectMetadata })) {
+        throw new Error(i18n.t('office.changedDuringClose'))
+      }
       return { closeSurface: projects.length === 0 }
     })
     if (!result.ok) throw new Error(result.error.message)
@@ -568,8 +610,9 @@ export class PresentationStore {
           const metadata = this.state.projectMetadata[project.id]
           return metadata && isPresentationProjectDirty(metadata) && approved.get(project.id) !== metadata.revision
         })) throw new Error(i18n.t('office.changedDuringClose'))
-        await this.options.workspacePersistence.persist({ schemaVersion: 1, activeProjectId: '', projects: [], projectMetadata: {} })
-        this.replaceInventory('', [], {}, false)
+        if (!await this.persistClosedWorkspace({ schemaVersion: 1, activeProjectId: '', projects: [], projectMetadata: {} })) {
+          throw new Error(i18n.t('office.changedDuringClose'))
+        }
         return true
       })
       if (!result.ok) throw new Error(result.error.message)
@@ -717,8 +760,9 @@ export class PresentationStore {
     const existing = this.state.projects.find((project) => this.state.projectMetadata[project.id]?.source?.path === this.openingSource?.path)
     if (!existing) return
     const existingMetadata = this.metadataOf(existing.id)
-    this.refreshing = existingMetadata.source?.mtimeMs !== this.openingSource.mtimeMs
-    if (this.refreshing && isPresentationProjectDirty(existingMetadata)) {
+    const action = resolveOfficeSourceOpen({ mtimeMs: existingMetadata.source?.mtimeMs, dirty: isPresentationProjectDirty(existingMetadata) }, this.openingSource.mtimeMs)
+    this.refreshing = action === 'refresh'
+    if (action === 'conflict') {
       throw new Error('The source file changed. Export or save your project before reopening it.')
     }
     if (this.state.activeProjectId !== existing.id) {

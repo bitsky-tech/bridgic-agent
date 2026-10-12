@@ -136,7 +136,7 @@ it('does not silently drop an unsupported image even when simplifying imported X
 it('converts WebP before Word accepts the edit and preserves the image through DOCX reopening', async () => {
   const writes: Uint8Array[] = []
   const store = createWordDomainStore(createWordWorkspace('webp', 'Report'), {
-    defaultTitle: 'Report', autoSave: true,
+    defaultTitle: 'Report',
     saveDocument: async (document) => {
       writes.push(await exportWordDocx(document))
       return { ok: true, fileName: 'Report.docx', source: { path: '/Report.docx', mtimeMs: 1 } }
@@ -144,6 +144,8 @@ it('converts WebP before Word accepts the edit and preserves the image through D
   })
   try {
     expect((await store.dispatch({ type: 'document.update', html: `<p><img src="${webpSource}"/></p>` })).ok).toBe(true)
+    expect(writes).toHaveLength(0)
+    expect((await store.dispatch({ type: 'document.save' })).ok).toBe(true)
     expect(isWordDocumentDirty(store.getSnapshot().documents[0]!)).toBe(false)
     expect(JSON.stringify(store.getSnapshot())).toContain(pngSource)
     expect(JSON.stringify(store.getSnapshot())).not.toContain('image/webp')
@@ -151,6 +153,8 @@ it('converts WebP before Word accepts the edit and preserves the image through D
     expect(await zip.file('word/media/image1.png')!.async('base64')).toBe(PNG)
     expect(JSON.stringify((await importDocxToHtml(writes[0]!)).document)).toContain(pngSource)
     expect((await store.dispatch({ type: 'document.append', text: 'A later edit' })).ok).toBe(true)
+    expect(writes).toHaveLength(1)
+    expect((await store.dispatch({ type: 'document.save' })).ok).toBe(true)
     expect(writes).toHaveLength(2)
     expect(decoded).toEqual(['image/webp'])
   } finally { store.dispose() }

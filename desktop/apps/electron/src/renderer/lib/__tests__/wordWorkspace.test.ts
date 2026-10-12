@@ -1,10 +1,14 @@
 import { afterAll, describe, expect, it } from 'bun:test'
 import { GlobalRegistrator } from '@happy-dom/global-registrator'
+import type { WordDomainStore, WordWorkspaceState } from '../wordDomain'
+import type { WordWorkspacePersister } from '../wordPersistence'
+import { createWordIndexedDbMemory } from '../../test-fixtures/wordIndexedDb'
 
 GlobalRegistrator.register()
 
 const { createWordDomainStore, createWordWorkspace } = await import('../wordDomain')
 const { appendTextBlockToSnapshot, getUniverDocumentText } = await import('../wordUniverModel')
+const { createWordWorkspacePersister, loadPersistedWordWorkspace } = await import('../wordPersistence')
 
 afterAll(async () => { await GlobalRegistrator.unregister() })
 
@@ -14,8 +18,40 @@ function createStore() {
 
 function deferred() {
   let resolve!: () => void
-  const promise = new Promise<void>((done) => { resolve = done })
-  return { promise, resolve }
+  let reject!: (error: Error) => void
+  const promise = new Promise<void>((done, fail) => { resolve = done; reject = fail })
+  return { promise, resolve, reject }
+}
+
+function closeWorkspace(store: WordDomainStore, operation: 'closeAll' | 'document.close' | 'closeDocumentTab', documentId: string) {
+  if (operation === 'closeAll') return store.closeAllDocuments()
+  if (operation === 'document.close') return store.dispatch({ type: 'document.close', documentId })
+  return store.closeDocumentTab(documentId)
+}
+
+async function withPersistedStore(sessionId: string, run: (store: WordDomainStore, indexed: ReturnType<typeof createWordIndexedDbMemory>, persister: WordWorkspacePersister) => Promise<void>) {
+  const originalIndexedDb = Object.getOwnPropertyDescriptor(window, 'indexedDB')
+  const indexed = createWordIndexedDbMemory()
+  Object.defineProperty(window, 'indexedDB', { configurable: true, value: indexed.factory })
+  const initial = createWordWorkspace(sessionId, 'Retained document')
+  const persister = createWordWorkspacePersister(sessionId, () => undefined)
+  const store = createWordDomainStore(initial, {
+    defaultTitle: 'Untitled',
+    confirmClose: async () => 'discard',
+    onChange: (state) => persister.save(state),
+    persistWorkspace: (state) => persister.persist(state),
+  })
+  try {
+    await persister.persist(initial)
+    await run(store, indexed, persister)
+  } finally {
+    store.dispose()
+    persister.dispose()
+    await persister.flush().catch(() => undefined)
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    if (originalIndexedDb) Object.defineProperty(window, 'indexedDB', originalIndexedDb)
+    else Reflect.deleteProperty(window, 'indexedDB')
+  }
 }
 
 describe('Word common workspace runtime', () => {
@@ -185,6 +221,292 @@ describe('Word common workspace runtime', () => {
     const text = getUniverDocumentText(store.getSnapshot().documents[0]!.snapshot)
     expect(text).toContain('Native typing')
     expect(text).toContain('Domain append')
+  })
+
+  it('flushes native content for workspace.get while metadata reads remain immediate', async () => {
+    const store = createStore()
+    const document = store.getSnapshot().documents[0]!
+    let flushes = 0
+    store.registerEditorCommandHandler(document.id, async () => true, async () => {
+      if (flushes++ === 0) store.commitEditorSnapshot(document.id, appendTextBlockToSnapshot(document.snapshot, 'Pending native typing', 'paragraph'))
+    })
+    expect(store.api.workspace.getSnapshot().documents[0]!.revision).toBe(0)
+    expect(flushes).toBe(0)
+    const contents = await store.dispatch({ type: 'workspace.get' })
+    expect(contents.ok).toBe(true)
+    if (contents.ok) expect(getUniverDocumentText(contents.state.documents[0]!.snapshot)).toContain('Pending native typing')
+    expect(flushes).toBe(1)
+    expect(store.api.workspace.getSnapshot().documents[0]!.revision).toBe(1)
+    expect(flushes).toBe(1)
+    store.dispose()
+  })
+
+  for (const operation of ['closeAll', 'document.close', 'closeDocumentTab'] as const) {
+    it(`retains the live inventory when ${operation} cannot persist its proposed close`, async () => {
+      const checkpoint = deferred()
+      const enteredCheckpoint = deferred()
+      const scheduled: WordWorkspaceState[] = []
+      let proposed: WordWorkspaceState | null = null
+      const store = createWordDomainStore(createWordWorkspace('checkpoint-failure', 'Untitled'), {
+        defaultTitle: 'Untitled',
+        confirmClose: async () => 'discard',
+        onChange: (workspace) => { scheduled.push(workspace) },
+        persistWorkspace: async (workspace) => {
+          proposed = workspace
+          enteredCheckpoint.resolve()
+          await checkpoint.promise
+        },
+      })
+      const initial = store.getSnapshot()
+      const closing = closeWorkspace(store, operation, initial.activeDocumentId)
+      await enteredCheckpoint.promise
+      expect(proposed!.documents).toHaveLength(0)
+      expect(store.getSnapshot()).toBe(initial)
+      expect(store.api.workspace.getSnapshot().documents).toHaveLength(1)
+      expect(scheduled).toEqual([])
+      checkpoint.reject(new Error('Recovery storage unavailable'))
+      expect(await closing).toMatchObject({ ok: false, error: { code: 'checkpoint_failed' } })
+      expect(store.getSnapshot()).toBe(initial)
+      expect(scheduled).toEqual([initial])
+      store.dispose()
+    })
+
+    it(`rechecks native typing after the durable ${operation} checkpoint and restores its open inventory`, async () => {
+      const checkpoint = deferred()
+      const enteredCheckpoint = deferred()
+      const scheduled: WordWorkspaceState[] = []
+      let nativePending = false
+      const store = createWordDomainStore(createWordWorkspace('checkpoint-race', 'Untitled'), {
+        defaultTitle: 'Untitled',
+        confirmClose: async () => 'discard',
+        onChange: (workspace) => { scheduled.push(workspace) },
+        persistWorkspace: async () => { enteredCheckpoint.resolve(); await checkpoint.promise },
+      })
+      const document = store.getSnapshot().documents[0]!
+      store.registerEditorCommandHandler(document.id, async () => true, async () => {
+        if (!nativePending) return
+        nativePending = false
+        store.commitEditorSnapshot(document.id, appendTextBlockToSnapshot(document.snapshot, 'Typed during the checkpoint', 'paragraph'))
+      })
+      const closing = closeWorkspace(store, operation, document.id)
+      await enteredCheckpoint.promise
+      nativePending = true
+      checkpoint.resolve()
+      expect(await closing).toMatchObject({ ok: false, error: { code: 'close_canceled' } })
+      expect(store.getSnapshot().documents).toHaveLength(1)
+      expect(getUniverDocumentText(store.getSnapshot().documents[0]!.snapshot)).toContain('Typed during the checkpoint')
+      expect(scheduled.at(-1)).toBe(store.getSnapshot())
+      expect(scheduled.every((workspace) => workspace.documents.length === 1)).toBe(true)
+      store.dispose()
+    })
+
+    it(`durably restores the latest native edits before ${operation} acknowledges cancellation`, async () => {
+      await withPersistedStore(`durable-cancellation-${operation}`, async (store, indexed) => {
+        const documentId = store.getSnapshot().activeDocumentId
+        let nativePending: string | null = null
+        let proposedWritten = false
+        let restoreTypingQueued = false
+        indexed.state.beforeWrite = async () => {
+          const writing = indexed.writes.at(-1) as WordWorkspaceState
+          if (writing.documents.length === 0) {
+            proposedWritten = true
+            nativePending = 'Typed after the proposed close'
+          } else if (proposedWritten && !restoreTypingQueued) {
+            restoreTypingQueued = true
+            nativePending = 'Typed during retained inventory restoration'
+          }
+        }
+        store.registerEditorCommandHandler(documentId, async () => true, async () => {
+          if (!nativePending) return
+          const document = store.getSnapshot().documents[0]!
+          const text = nativePending
+          nativePending = null
+          store.commitEditorSnapshot(documentId, appendTextBlockToSnapshot(document.snapshot, text, 'paragraph'))
+        })
+        expect(await closeWorkspace(store, operation, documentId)).toMatchObject({ ok: false, error: { code: 'close_canceled' } })
+        expect(restoreTypingQueued).toBe(true)
+        const retained = store.getSnapshot()
+        const text = getUniverDocumentText(retained.documents[0]!.snapshot)
+        expect(text).toContain('Typed after the proposed close')
+        expect(text).toContain('Typed during retained inventory restoration')
+        // No scheduler flush or debounce wait may be needed after cancellation returns.
+        expect(indexed.records.get(retained.sessionId)).toEqual(retained)
+        expect(await loadPersistedWordWorkspace(retained.sessionId)).toEqual(retained)
+      })
+    })
+
+    it(`durably restores the open inventory before ${operation} reports a final native flush failure`, async () => {
+      await withPersistedStore(`failed-final-flush-${operation}`, async (store, indexed) => {
+        const retained = store.getSnapshot()
+        const restoration = deferred()
+        const enteredRestoration = deferred()
+        let proposedWritten = false
+        let failedFlushes = 0
+        indexed.state.beforeWrite = async () => {
+          if ((indexed.writes.at(-1) as WordWorkspaceState).documents.length === 0) proposedWritten = true
+          else if (proposedWritten) { enteredRestoration.resolve(); await restoration.promise }
+        }
+        store.registerEditorCommandHandler(retained.activeDocumentId, async () => true, async () => {
+          if (!proposedWritten) return
+          failedFlushes++
+          throw new Error('The Word editor could not synchronize its document.')
+        })
+        let acknowledged = false
+        const closing = closeWorkspace(store, operation, retained.activeDocumentId).then((result) => { acknowledged = true; return result })
+        try {
+          await enteredRestoration.promise
+          expect(acknowledged).toBe(false)
+          expect(store.getSnapshot()).toBe(retained)
+          expect((indexed.records.get(retained.sessionId) as WordWorkspaceState).documents).toHaveLength(0)
+        } finally {
+          restoration.resolve()
+        }
+        expect(await closing).toMatchObject({
+          ok: false,
+          error: { code: 'checkpoint_failed', message: 'The Word editor could not synchronize its document.' },
+        })
+        expect(failedFlushes).toBe(1)
+        expect(store.getSnapshot()).toBe(retained)
+        // The failed close must already be recoverable without a debounce or manual flush.
+        expect(indexed.records.get(retained.sessionId)).toEqual(retained)
+        expect(await loadPersistedWordWorkspace(retained.sessionId)).toEqual(retained)
+      })
+    })
+
+    it(`retains native edits arriving during ${operation} recovery after a final flush failure`, async () => {
+      await withPersistedStore(`failed-final-flush-race-${operation}`, async (store, indexed) => {
+        const documentId = store.getSnapshot().activeDocumentId
+        let proposedWritten = false
+        let restoreTypingCommitted = false
+        let failedFlushes = 0
+        indexed.state.beforeWrite = async () => {
+          const writing = indexed.writes.at(-1) as WordWorkspaceState
+          if (writing.documents.length === 0) {
+            proposedWritten = true
+          } else if (proposedWritten && !restoreTypingCommitted) {
+            restoreTypingCommitted = true
+            const document = store.getSnapshot().documents[0]!
+            store.commitEditorSnapshot(documentId, appendTextBlockToSnapshot(document.snapshot, 'Typed during failed-close recovery', 'paragraph'))
+          }
+        }
+        store.registerEditorCommandHandler(documentId, async () => true, async () => {
+          if (!proposedWritten) return
+          failedFlushes++
+          throw new Error('The Word editor could not synchronize its document.')
+        })
+        expect(await closeWorkspace(store, operation, documentId)).toMatchObject({ ok: false, error: { code: 'checkpoint_failed' } })
+        expect(restoreTypingCommitted).toBe(true)
+        expect(failedFlushes).toBe(1)
+        const retained = store.getSnapshot()
+        expect(getUniverDocumentText(retained.documents[0]!.snapshot)).toContain('Typed during failed-close recovery')
+        expect(indexed.records.get(retained.sessionId)).toEqual(retained)
+        expect(await loadPersistedWordWorkspace(retained.sessionId)).toEqual(retained)
+      })
+    })
+
+    it(`retains a retry when ${operation} cannot restore recovery after a final native flush failure`, async () => {
+      await withPersistedStore(`failed-final-flush-restoration-${operation}`, async (store, indexed, persister) => {
+        const retained = store.getSnapshot()
+        let proposedWritten = false
+        indexed.state.beforeWrite = async () => {
+          if ((indexed.writes.at(-1) as WordWorkspaceState).documents.length === 0) proposedWritten = true
+          else if (proposedWritten) indexed.state.failWrites = true
+        }
+        store.registerEditorCommandHandler(retained.activeDocumentId, async () => true, async () => {
+          if (proposedWritten) throw new Error('The Word editor could not synchronize its document.')
+        })
+        expect(await closeWorkspace(store, operation, retained.activeDocumentId)).toMatchObject({ ok: false, error: { code: 'checkpoint_failed' } })
+        expect(store.getSnapshot()).toBe(retained)
+        expect(persister.getSnapshot().pendingCount).toBeGreaterThan(0)
+        expect((indexed.records.get(retained.sessionId) as WordWorkspaceState).documents).toHaveLength(0)
+        indexed.state.beforeWrite = null
+        indexed.state.failWrites = false
+        await new Promise((resolve) => setTimeout(resolve, 0))
+        await persister.flush()
+        expect(await loadPersistedWordWorkspace(retained.sessionId)).toEqual(retained)
+      })
+    })
+
+    it(`reports a failed ${operation} cancellation restoration and retains a recoverable retry`, async () => {
+      await withPersistedStore(`failed-restoration-${operation}`, async (store, indexed, persister) => {
+        const documentId = store.getSnapshot().activeDocumentId
+        let proposedWritten = false
+        let nativePending = false
+        indexed.state.beforeWrite = async () => {
+          const writing = indexed.writes.at(-1) as WordWorkspaceState
+          if (writing.documents.length === 0) {
+            proposedWritten = true
+            nativePending = true
+          } else if (proposedWritten) {
+            indexed.state.failWrites = true
+          }
+        }
+        store.registerEditorCommandHandler(documentId, async () => true, async () => {
+          if (!nativePending) return
+          nativePending = false
+          const document = store.getSnapshot().documents[0]!
+          store.commitEditorSnapshot(documentId, appendTextBlockToSnapshot(document.snapshot, 'Retain input after failed restoration', 'paragraph'))
+        })
+        expect(await closeWorkspace(store, operation, documentId)).toMatchObject({ ok: false, error: { code: 'checkpoint_failed' } })
+        const retained = store.getSnapshot()
+        expect(retained.documents).toHaveLength(1)
+        expect(getUniverDocumentText(retained.documents[0]!.snapshot)).toContain('Retain input after failed restoration')
+        expect(persister.getSnapshot().pendingCount).toBeGreaterThan(0)
+        indexed.state.beforeWrite = null
+        indexed.state.failWrites = false
+        await new Promise((resolve) => setTimeout(resolve, 0))
+        await persister.flush()
+        expect(await loadPersistedWordWorkspace(retained.sessionId)).toEqual(retained)
+      })
+    })
+  }
+
+  it('publishes a closed inventory only after its durable checkpoint succeeds', async () => {
+    const checkpoint = deferred()
+    const enteredCheckpoint = deferred()
+    const store = createWordDomainStore(createWordWorkspace('checkpoint-success', 'Untitled'), {
+      defaultTitle: 'Untitled',
+      confirmClose: async () => 'discard',
+      persistWorkspace: async () => { enteredCheckpoint.resolve(); await checkpoint.promise },
+    })
+    const inventories: number[] = []
+    store.subscribe(() => inventories.push(store.getSnapshot().documents.length))
+    const closing = store.closeAllDocuments()
+    await enteredCheckpoint.promise
+    expect(store.getSnapshot().documents).toHaveLength(1)
+    expect(inventories).toEqual([])
+    checkpoint.resolve()
+    expect(await closing).toMatchObject({ ok: true, state: { documents: [] } })
+    expect(inventories).toEqual([0])
+    store.dispose()
+  })
+
+  it('retains an inactive tab when its checkpoint would miss new typing in the remaining active tab', async () => {
+    const checkpoint = deferred()
+    const enteredCheckpoint = deferred()
+    let nativePending = false
+    const store = createWordDomainStore(createWordWorkspace('remaining-document-race', 'First'), {
+      defaultTitle: 'Untitled',
+      confirmClose: async () => 'discard',
+      persistWorkspace: async () => { enteredCheckpoint.resolve(); await checkpoint.promise },
+    })
+    const closingId = store.getSnapshot().activeDocumentId
+    await store.dispatch({ type: 'document.create', title: 'Second' })
+    const active = store.getSnapshot().documents[1]!
+    store.registerEditorCommandHandler(active.id, async () => true, async () => {
+      if (!nativePending) return
+      nativePending = false
+      store.commitEditorSnapshot(active.id, appendTextBlockToSnapshot(active.snapshot, 'Keep this active input', 'paragraph'))
+    })
+    const closing = store.closeDocumentTab(closingId)
+    await enteredCheckpoint.promise
+    nativePending = true
+    checkpoint.resolve()
+    expect(await closing).toMatchObject({ ok: false, error: { code: 'close_canceled' } })
+    expect(store.getSnapshot().documents).toHaveLength(2)
+    expect(store.getSnapshot().activeDocumentId).toBe(active.id)
+    expect(getUniverDocumentText(store.getSnapshot().documents[1]!.snapshot)).toContain('Keep this active input')
+    store.dispose()
   })
 
   it('rechecks expected revisions after flushing pending native input', async () => {

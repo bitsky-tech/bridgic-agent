@@ -1,4 +1,5 @@
 import type { OfficeFileSource } from '../../../shared/office-files'
+import { resolveOfficeSourceOpen } from './officeSourceOpen'
 import { createOfficeWorkspaceRuntime, OfficeOperationError } from './officeWorkspaceRuntime'
 
 export interface ExcelWorkspaceTab<TSnapshot> {
@@ -85,6 +86,105 @@ export function createExcelWorkspace<TSnapshot>(options: {
     activate: (tabId: string | null) => replace(state.tabs, tabId),
     updateTab: (tabId: string, update: (tab: Tab) => Tab) => {
       replace(state.tabs.map((tab) => tab.tabId === tabId ? update(tab) : tab), state.activeTabId)
+    },
+    async openWorkbook(options: {
+      document: Pick<Tab, 'documentId' | 'source' | 'fileName' | 'mtimeMs'>
+      importSnapshot: () => Promise<TSnapshot | null>
+      flushEditor: () => Promise<void>
+      assertCurrent: () => void
+      conflictMessage: string
+      replaceInitialBlank?: boolean
+      expectedDocumentId?: string | null
+    }) {
+      const { assertCurrent, flushEditor } = options
+      const { documentId, source, fileName, mtimeMs } = options.document
+      const document = { documentId, source, fileName, mtimeMs }
+      await flushEditor()
+      assertCurrent()
+      const existing = state.tabs.find((tab) => document.source
+        ? tab.source?.path === document.source.path
+        : tab.documentId === document.documentId)
+      if (options.expectedDocumentId && existing?.tabId !== options.expectedDocumentId) {
+        throw new OfficeOperationError('source_conflict', 'The requested source no longer belongs to this workbook.')
+      }
+      const resolution = resolveOfficeSourceOpen(existing, document.mtimeMs)
+      if (resolution === 'reuse') {
+        replace(state.tabs, existing!.tabId)
+        return { documentId: existing!.tabId, reused: true }
+      }
+      if (resolution === 'conflict') throw new OfficeOperationError('source_conflict', options.conflictMessage)
+      const snapshot = await options.importSnapshot()
+      assertCurrent()
+      if (snapshot === null) return { canceled: true }
+      await flushEditor()
+      assertCurrent()
+      if (existing) {
+        const current = state.tabs.find((tab) => tab.tabId === existing.tabId)
+        if (!current) throw new OfficeOperationError('document_not_found', 'The workbook is no longer open.')
+        // Native typing can continue while parsing. Never replace a newer draft.
+        if (current.dirty) throw new OfficeOperationError('source_conflict', options.conflictMessage)
+        const refreshed = {
+          ...current, ...document, snapshot, dirty: false,
+          revision: current.revision + 1, changeVersion: current.changeVersion + 1,
+        }
+        replace(state.tabs.map((tab) => tab.tabId === current.tabId ? refreshed : tab), current.tabId)
+        return { documentId: current.tabId, reused: false }
+      }
+      const tab: Tab = {
+        ...document, tabId: crypto.randomUUID(), snapshot,
+        dirty: false, changeVersion: 0, revision: 0,
+      }
+      const initial = state.tabs[0]
+      replace(options.replaceInitialBlank && state.tabs.length === 1
+        && initial?.documentId === null && initial.changeVersion === 0
+        ? [tab] : [...state.tabs, tab], tab.tabId)
+      return { documentId: tab.tabId, reused: false }
+    },
+    async commitClose(options: {
+      tabs: Tab[]
+      activeTabId: string | null
+      persist: (tabs: Tab[], activeTabId: string | null) => Promise<unknown>
+      flushEditor: () => Promise<void>
+      assertCurrent: () => void
+      changedMessage: string
+    }) {
+      const approved = state
+      let flushDuringRestore = false
+      const restoreInventory = async (flushEditor: boolean) => {
+        let retained: typeof state
+        do {
+          retained = state
+          await options.persist(retained.tabs, retained.activeTabId)
+          if (flushEditor) await options.flushEditor()
+          options.assertCurrent()
+        } while (state !== retained)
+      }
+      try {
+        // Keep the native editors alive until the proposed inventory is durable.
+        await options.persist(options.tabs, options.activeTabId)
+        await options.flushEditor()
+        options.assertCurrent()
+        if (state.tabs.length !== approved.tabs.length || state.tabs.some((tab, index) => {
+          const previous = approved.tabs[index]
+          return tab.tabId !== previous?.tabId || tab.changeVersion !== previous.changeVersion
+        })) {
+          flushDuringRestore = true
+          throw new OfficeOperationError('document_changed', options.changedMessage)
+        }
+        replace(options.tabs, options.activeTabId)
+      } catch (cause) {
+        // Even a failed native flush must restore its last accepted model before
+        // the close operation reports failure. Input may continue during writes.
+        try { await restoreInventory(flushDuringRestore) } catch (restoreError) {
+          // A retrying native flush may fail after restoring the inventory once.
+          // Persist accepted input without attempting that failed flush again.
+          try { await restoreInventory(false) } catch (checkpointError) {
+            throw new OfficeOperationError('checkpoint_failed', checkpointError instanceof Error ? checkpointError.message : 'The Excel recovery checkpoint could not be restored.')
+          }
+          throw new OfficeOperationError('checkpoint_failed', restoreError instanceof Error ? restoreError.message : 'The Excel recovery checkpoint could not be restored.')
+        }
+        throw cause
+      }
     },
     completeSave(tabId: string, saved: ExcelWorkbookSave<TSnapshot>, draftName: (fileName: string) => string): string[] {
       if (!state.tabs.some((tab) => tab.tabId === tabId)) {

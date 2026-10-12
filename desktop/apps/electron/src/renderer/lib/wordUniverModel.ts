@@ -22,6 +22,7 @@ import {
   getPlainText,
   type IDocumentBody,
   type IDocumentData,
+  type IDocumentStyle,
   type IParagraph,
   type ISectionBreak,
   type ITable,
@@ -54,6 +55,15 @@ const PAGE_MARGIN = {
 const HEADER_ID = 'bridgic-word-header'
 const FOOTER_ID = 'bridgic-word-footer'
 const DEFAULT_TABLE_WIDTH = 650
+
+interface WordNativeDocumentStyle extends IDocumentStyle {
+  /** Export-only numbering belongs to the snapshot so native undo restores it. */
+  bridgicShowPageNumbers?: boolean
+}
+
+export function getSnapshotShowPageNumbers(snapshot: IDocumentData): boolean {
+  return (snapshot.documentStyle as WordNativeDocumentStyle).bridgicShowPageNumbers === true
+}
 
 /** Import-only HTML parts; the native snapshot remains the workspace authority. */
 export interface WordHeaderFooterHtmlVariant {
@@ -179,10 +189,10 @@ export function normalizeUniverDocumentSnapshot(
   const missingFields: ('headerHtml' | 'footerHtml')[] = []
   if (missingHeader) missingFields.push('headerHtml')
   if (missingFooter) missingFields.push('footerHtml')
-  return missingFields.length ? applyHeaderFooterToSnapshot(normalized, headerFooter, missingFields) : normalized
+  return missingFields.length ? applyHeaderFooterToSnapshot(normalized, { ...headerFooter, showPageNumbers: getSnapshotShowPageNumbers(normalized) }, missingFields) : normalized
 }
 
-/** Convert legacy, sanitized HTML workspaces to Univer's native document model. */
+/** Convert sanitized HTML into Univer native document content. */
 export function htmlToUniverSnapshot(html: string, id: string, title: string): IDocumentData {
   const template = document.createElement('template')
   template.innerHTML = html
@@ -285,6 +295,104 @@ export function htmlToUniverSnapshot(html: string, id: string, title: string): I
   }
 }
 
+/** Replace body content without rebuilding native layout, segments or their shared assets. */
+export function replaceWordBodyHtml(snapshot: IDocumentData, html: string): IDocumentData {
+  const parsed = htmlToUniverSnapshot(html, snapshot.id, snapshot.title ?? '')
+  const result = clone(snapshot)
+  const body = parsed.body!
+  const segments = [...Object.values(snapshot.headers ?? {}), ...Object.values(snapshot.footers ?? {})].map((part) => part.body)
+  const retainedDrawings = new Set([...segments.flatMap((segment) => segment.customBlocks?.map((block) => block.blockId) ?? []), ...(snapshot.headerFooterDrawingsOrder ?? [])])
+  const retainedTables = new Set(segments.flatMap((segment) => segment.tables?.map((table) => table.tableId) ?? []))
+  const retainedLists = new Set(segments.flatMap((segment) => segment.paragraphs?.flatMap(({ bullet }) => bullet
+    ? [bullet.listId, bullet.listType] : []) ?? []))
+  result.drawings = Object.fromEntries(Object.entries(result.drawings ?? {}).filter(([id]) => retainedDrawings.has(id)))
+  result.tableSource = Object.fromEntries(Object.entries(result.tableSource ?? {}).filter(([id]) => retainedTables.has(id)))
+  result.lists = Object.fromEntries(Object.entries(result.lists ?? {}).filter(([id]) => retainedLists.has(id)))
+  const resourceId = (id: string, occupied: object) => {
+    let nextId = id
+    while (Object.hasOwn(occupied, nextId)) nextId += '-body'
+    return nextId
+  }
+  const drawingIds = new Map<string, string>()
+  for (const [id, drawing] of Object.entries(parsed.drawings ?? {})) {
+    const nextId = resourceId(id, result.drawings)
+    drawingIds.set(id, nextId)
+    for (const block of body.customBlocks ?? []) if (block.blockId === id) block.blockId = nextId
+    result.drawings[nextId] = { ...drawing, drawingId: nextId }
+  }
+  for (const [id, table] of Object.entries(parsed.tableSource ?? {})) {
+    const nextId = resourceId(id, result.tableSource)
+    for (const range of body.tables ?? []) if (range.tableId === id) range.tableId = nextId
+    result.tableSource[nextId] = { ...table, tableId: nextId }
+  }
+  const listSequences = new Map<string, string>()
+  const listTypes = new Map<string, string>()
+  const occupiedSequences = new Set(retainedLists)
+  for (const paragraph of body.paragraphs ?? []) {
+    const bullet = paragraph.bullet
+    if (!bullet) continue
+    const sequence = `${bullet.listId}:${bullet.listType}`
+    let nextId = listSequences.get(sequence)
+    if (!nextId) {
+      nextId = bullet.listId
+      while (occupiedSequences.has(nextId)) nextId += '-body'
+      occupiedSequences.add(nextId)
+      listSequences.set(sequence, nextId)
+    }
+    let nextType = listTypes.get(bullet.listType)
+    if (!nextType) {
+      nextType = resourceId(bullet.listType, result.lists)
+      // A surviving segment can resolve a preset without storing its definition.
+      // Reserve that type as well so later body list edits cannot alter the part.
+      while (retainedLists.has(nextType)) nextType = resourceId(`${nextType}-body`, result.lists)
+      const preset = PRESET_LIST_TYPE[bullet.listType] ?? parsed.lists?.[bullet.listId]
+      if (preset) result.lists[nextType] = { ...clone(preset), listType: nextType }
+      listTypes.set(bullet.listType, nextType)
+    }
+    // Native rendering resolves listType, while export groups by listId. Keep
+    // mixed nested list types distinct and isolate them from segment definitions.
+    bullet.listId = nextId
+    bullet.listType = nextType
+  }
+  const rangeIds = new Set(segments.flatMap((segment) => segment.customRanges?.map((range) => range.rangeId) ?? []))
+  const renamedRanges = new Map<string, string>()
+  for (const range of body.customRanges ?? []) {
+    const id = range.rangeId
+    let nextId = renamedRanges.get(id)
+    if (!nextId) {
+      nextId = id
+      while (rangeIds.has(nextId)) nextId += '-body'
+      rangeIds.add(nextId)
+      renamedRanges.set(id, nextId)
+    }
+    range.rangeId = nextId
+    if (range.properties?.id === id) range.properties.id = nextId
+  }
+  result.drawingsOrder = [...new Set([
+    ...(snapshot.drawingsOrder ?? []).filter((id) => retainedDrawings.has(id) && result.drawings![id]),
+    ...retainedDrawings.values(),
+    ...(parsed.drawingsOrder ?? []).map((id) => drawingIds.get(id)!),
+  ])].filter((id) => Boolean(result.drawings![id]))
+  if (result.headerFooterDrawingsOrder) result.headerFooterDrawingsOrder = result.headerFooterDrawingsOrder.filter((id) => result.drawings![id])
+  const sourceSections = mainWordSectionBreaks(snapshot.body)
+  const targetSections = mainWordSectionBreaks(body)
+  for (const [index, section] of targetSections.entries()) {
+    // HTML has no section boundaries. A collapsed replacement inherits the first
+    // native section; matching counts retain styles by ordinal, never old offsets.
+    const source = sourceSections[Math.min(index, sourceSections.length - 1)]
+    if (source) Object.assign(section, clone(source), { startIndex: section.startIndex })
+  }
+  result.body = body
+  if (result.resources) result.resources = result.resources.filter((resource) => resource.name !== 'DOC_DRAWING_PLUGIN' && resource.name !== 'DOC_HYPER_LINK_PLUGIN')
+  return result
+}
+
+function mainWordSectionBreaks(body?: IDocumentBody): ISectionBreak[] {
+  if (!body) return []
+  return (body.sectionBreaks ?? []).filter((section) => body.dataStream[section.startIndex] === DataStreamTreeTokenType.SECTION_BREAK
+    && !body.tables?.some((table) => section.startIndex >= table.startIndex && section.startIndex < table.endIndex)).sort((left, right) => left.startIndex - right.startIndex)
+}
+
 export function applyPageSettingsToSnapshot(snapshot: IDocumentData, page: WordPageSettings, fields?: readonly (keyof WordPageSettings)[]): IDocumentData {
   const result = clone(snapshot)
   const margin = PAGE_MARGIN[page.margins]
@@ -317,7 +425,7 @@ export function applyPageSettingsToSnapshot(snapshot: IDocumentData, page: WordP
   return result
 }
 
-export function applyHeaderFooterToSnapshot(snapshot: IDocumentData, settings: WordHeaderFooterSettings, fields: readonly ('headerHtml' | 'footerHtml')[] = ['headerHtml', 'footerHtml'], variants: readonly WordHeaderFooterHtmlVariant[] = []): IDocumentData {
+export function applyHeaderFooterToSnapshot(snapshot: IDocumentData, settings: WordHeaderFooterSettings, fields: readonly (keyof WordHeaderFooterSettings)[] = ['headerHtml', 'footerHtml'], variants: readonly WordHeaderFooterHtmlVariant[] = []): IDocumentData {
   const result = clone(snapshot)
   result.drawings ??= {}
   result.drawingsOrder ??= []
@@ -405,13 +513,15 @@ export function applyHeaderFooterToSnapshot(snapshot: IDocumentData, settings: W
     result.footers = body ? { [FOOTER_ID]: { footerId: FOOTER_ID, body } } : {}
     result.documentStyle.defaultFooterId = body ? FOOTER_ID : ''
   }
-  result.documentStyle = {
+  const documentStyle: WordNativeDocumentStyle = {
     ...result.documentStyle,
-    firstPageHeaderId: settings.differentFirstPage ? '' : undefined,
-    firstPageFooterId: settings.differentFirstPage ? '' : undefined,
+    firstPageHeaderId: result.documentStyle.firstPageHeaderId ?? (settings.differentFirstPage ? '' : undefined),
+    firstPageFooterId: result.documentStyle.firstPageFooterId ?? (settings.differentFirstPage ? '' : undefined),
     useFirstPageHeaderFooter: settings.differentFirstPage ? BooleanNumber.TRUE : BooleanNumber.FALSE,
     pageNumberStart: settings.pageNumberStart,
+    bridgicShowPageNumbers: settings.showPageNumbers,
   }
+  result.documentStyle = documentStyle
   for (const { kind, variant, html, id: suppliedId } of variants) {
     const id = suppliedId ?? `${kind === 'header' ? HEADER_ID : FOOTER_ID}-${variant}`
     // An explicitly empty first/even part is meaningful: it overrides the default.
@@ -428,6 +538,25 @@ export function applyHeaderFooterToSnapshot(snapshot: IDocumentData, settings: W
       else result.documentStyle.evenPageFooterId = id
     }
   }
+  const sections = mainWordSectionBreaks(result.body)
+  for (const [field, parts, defaultKey, variantKeys] of [
+    ['headerHtml', result.headers, 'defaultHeaderId', ['firstPageHeaderId', 'evenPageHeaderId']],
+    ['footerHtml', result.footers, 'defaultFooterId', ['firstPageFooterId', 'evenPageFooterId']],
+  ] as const) {
+    if (!fields.includes(field)) continue
+    // This command replaces the entire requested side. Keep the section refs
+    // coherent with that map, including imported explicit empty defaults.
+    for (const style of [result.documentStyle, ...sections]) {
+      if (style[defaultKey] !== undefined) style[defaultKey] = result.documentStyle[defaultKey]
+      for (const key of variantKeys) if (style[key] && !parts[style[key]!]) style[key] = ''
+    }
+  }
+  if (fields.includes('differentFirstPage')) {
+    for (const section of sections) section.useFirstPageHeaderFooter = result.documentStyle.useFirstPageHeaderFooter
+  }
+  // The document start belongs to its first section. Later explicit restarts or
+  // continuation must survive; copying the start to every section restarts each.
+  if (fields.includes('pageNumberStart') && sections[0]) sections[0].pageNumberStart = settings.pageNumberStart
   return result
 }
 

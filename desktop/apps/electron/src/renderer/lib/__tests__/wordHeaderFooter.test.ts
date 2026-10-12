@@ -5,8 +5,8 @@ import JSZip from 'jszip'
 
 GlobalRegistrator.register()
 const { createWordHeaderFooterDraft, mergeWordHeaderFooterDraft, wordHeaderFooterContentSignature } = await import('../wordHeaderFooter')
-const { createWordDomainStore, createWordWorkspace } = await import('../wordDomain')
-const { createUniverDocumentSnapshot, htmlToUniverSnapshot, normalizeUniverDocumentSnapshot } = await import('../wordUniverModel')
+const { createEmptyWordWorkspace, createWordDomainStore, createWordWorkspace } = await import('../wordDomain')
+const { createUniverDocumentSnapshot, createUniverSectionedDocumentSnapshot, htmlToUniverSnapshot, normalizeUniverDocumentSnapshot } = await import('../wordUniverModel')
 const { exportWordDocx } = await import('../wordDocxExport')
 const { importDocxToHtml } = await import('../wordDocxImport')
 afterAll(async () => GlobalRegistrator.unregister())
@@ -56,6 +56,83 @@ function richSnapshot(): IDocumentData {
 }
 
 describe('Native Word header/footer drafts', () => {
+  it('keeps native variants and imported section numbering while explicitly updating document controls', async () => {
+    const native = createUniverSectionedDocumentSnapshot('section-controls', 'Report', page, { ...settings, differentFirstPage: true, pageNumberStart: 6 }, [
+      {
+        html: '<table><tr><td>Body cell</td></tr></table><p>First section</p>',
+        style: { defaultHeaderId: 'default-header', firstPageHeaderId: 'first-header', evenPageHeaderId: 'even-header', defaultFooterId: 'default-footer', firstPageFooterId: 'first-footer', useFirstPageHeaderFooter: 1, pageNumberStart: 6, pageSize: { width: 1200, height: 700 }, marginLeft: 47 },
+        parts: [
+          { kind: 'header', variant: 'default', id: 'default-header', html: '<p>Default header</p>' },
+          { kind: 'header', variant: 'first', id: 'first-header', html: '<p>First header</p>' },
+          { kind: 'header', variant: 'even', id: 'even-header', html: '<p>Even header</p>' },
+          { kind: 'footer', variant: 'default', id: 'default-footer', html: '<p>Default footer</p>' },
+          { kind: 'footer', variant: 'first', id: 'first-footer', html: '<p>First footer</p>' },
+        ],
+      },
+      { html: '<p>Second section</p>', style: { defaultHeaderId: '', defaultFooterId: '', useFirstPageHeaderFooter: 0, pageNumberStart: 11, pageSize: { width: 600, height: 900 }, marginLeft: 29 }, parts: [] },
+    ])
+    expect(native.body!.sectionBreaks!.at(-1)).toMatchObject({ useFirstPageHeaderFooter: 0, pageNumberStart: 11 })
+    // A native global control can differ from an explicit first-section override.
+    native.documentStyle.pageNumberStart = 7
+    const store = createWordDomainStore(createEmptyWordWorkspace('section-controls'), { defaultTitle: 'Report' })
+    try {
+      expect((await store.dispatch({ type: 'document.create', snapshot: native })).ok).toBe(true)
+      const before = structuredClone(store.getSnapshot().documents[0]!.snapshot)
+      expect((await store.dispatch({ type: 'document.headerFooter.update', settings: { showPageNumbers: true } })).ok).toBe(true)
+      expect(store.getSnapshot().documents[0]!.snapshot.documentStyle).toMatchObject({ firstPageHeaderId: 'first-header', firstPageFooterId: 'first-footer', evenPageHeaderId: 'even-header' })
+      expect(store.getSnapshot().documents[0]!.snapshot.body).toEqual(before.body)
+      // Even a request matching the global value must reach section overrides.
+      expect((await store.dispatch({ type: 'document.headerFooter.update', settings: { pageNumberStart: 7, differentFirstPage: true } })).ok).toBe(true)
+      const updated = store.getSnapshot().documents[0]!.snapshot
+      const sections = updated.body!.sectionBreaks!.filter((section) => !updated.body!.tables!.some((table) => section.startIndex >= table.startIndex && section.startIndex < table.endIndex))
+      expect(sections[0]).toMatchObject({ pageNumberStart: 7, useFirstPageHeaderFooter: 1, pageSize: { width: 1200, height: 700 }, marginLeft: 47 })
+      expect(sections[1]).toMatchObject({ pageNumberStart: 11, useFirstPageHeaderFooter: 1, pageSize: { width: 600, height: 900 }, marginLeft: 29 })
+      expect(updated.headers).toEqual(before.headers)
+      expect(updated.footers).toEqual(before.footers)
+      expect(updated.body!.sectionBreaks![0]).toEqual(before.body!.sectionBreaks![0])
+      await store.dispatch({ type: 'document.headerFooter.update', settings: { differentFirstPage: false } })
+      const disabled = store.getSnapshot().documents[0]!.snapshot
+      expect(disabled.documentStyle).toMatchObject({ firstPageHeaderId: 'first-header', firstPageFooterId: 'first-footer', useFirstPageHeaderFooter: 0 })
+      expect(disabled.headers).toEqual(before.headers)
+      expect(disabled.footers).toEqual(before.footers)
+      expect(disabled.body!.sectionBreaks!.filter((section) => section.pageSize).map((section) => section.useFirstPageHeaderFooter)).toEqual([0, 0])
+      await store.dispatch({ type: 'document.headerFooter.update', settings: { differentFirstPage: true } })
+      expect(store.getSnapshot().documents[0]!.snapshot.documentStyle.firstPageHeaderId).toBe('first-header')
+    } finally { store.dispose() }
+  })
+
+  it('synchronizes replaced defaults on main sections and clears deleted variant refs without altering the opposite side', async () => {
+    const native = createUniverSectionedDocumentSnapshot('replace-defaults', 'Report', page, { ...settings, differentFirstPage: true }, [{
+      html: '<p>Body</p><table><tr><td>Body cell</td></tr></table>',
+      style: { defaultHeaderId: '', firstPageHeaderId: 'first-header', evenPageHeaderId: 'even-header', defaultFooterId: 'default-footer', firstPageFooterId: 'first-footer', evenPageFooterId: 'even-footer', useFirstPageHeaderFooter: 1, pageNumberStart: 6, pageSize: { width: 1200, height: 700 }, marginLeft: 47 },
+      parts: [
+        { kind: 'header', variant: 'first', id: 'first-header', html: '<p>Old first header</p>' },
+        { kind: 'header', variant: 'even', id: 'even-header', html: '<p>Old even header</p>' },
+        { kind: 'footer', variant: 'default', id: 'default-footer', html: '<p>Footer</p>' },
+        { kind: 'footer', variant: 'first', id: 'first-footer', html: '<p>First footer</p>' },
+        { kind: 'footer', variant: 'even', id: 'even-footer', html: '<p>Even footer</p>' },
+      ],
+    }])
+    const store = createWordDomainStore(createEmptyWordWorkspace('replace-defaults'), { defaultTitle: 'Report' })
+    try {
+      await store.dispatch({ type: 'document.create', snapshot: native })
+      const before = structuredClone(store.getSnapshot().documents[0]!.snapshot)
+      const cell = before.body!.sectionBreaks![0]
+      await store.dispatch({ type: 'document.headerFooter.update', settings: { headerHtml: '<p>New header</p>' } })
+      const updated = store.getSnapshot().documents[0]!.snapshot
+      expect(updated.headers).toEqual({ 'bridgic-word-header': { headerId: 'bridgic-word-header', body: htmlToUniverSnapshot('<p>New header</p>', updated.id, '').body! } })
+      expect(updated.body!.sectionBreaks!.at(-1)).toEqual({ ...before.body!.sectionBreaks!.at(-1)!, defaultHeaderId: 'bridgic-word-header', firstPageHeaderId: '', evenPageHeaderId: '' })
+      expect(updated.body!.sectionBreaks![0]).toEqual(cell)
+      expect(updated.documentStyle).toEqual({ ...before.documentStyle, defaultHeaderId: 'bridgic-word-header', firstPageHeaderId: '', evenPageHeaderId: '' })
+      expect(updated.footers).toEqual(before.footers)
+      await store.dispatch({ type: 'document.headerFooter.update', settings: { headerHtml: '' } })
+      const cleared = store.getSnapshot().documents[0]!.snapshot
+      expect(cleared.headers).toEqual({})
+      expect(cleared.body!.sectionBreaks!.at(-1)).toEqual({ ...updated.body!.sectionBreaks!.at(-1)!, defaultHeaderId: '' })
+      expect(cleared.footers).toEqual(before.footers)
+    } finally { store.dispose() }
+  })
+
   it.each(['headerHtml', 'footerHtml'] as const)('adds, clears and adds %s again from a real blank document through save/reopen', async (field) => {
     const store = createWordDomainStore(createWordWorkspace(`blank-${field}`, 'Report'), { defaultTitle: 'Report' })
     try {

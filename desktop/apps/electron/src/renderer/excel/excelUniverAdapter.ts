@@ -2,8 +2,17 @@ import {
   BorderStyleTypes,
   BorderType,
   Dimension,
+  EDITOR_ACTIVATED,
+  FOCUSING_COMMON_DRAWINGS,
+  FOCUSING_EDITOR_STANDALONE,
+  FOCUSING_FX_BAR_EDITOR,
+  FOCUSING_SHEET,
+  FOCUSING_UNIVER_EDITOR,
+  ICommandService,
+  IContextService,
   ImageSourceType,
   InterceptorEffectEnum,
+  IUniverInstanceService,
   LocaleType,
   LogLevel,
   ThemeService,
@@ -16,9 +25,15 @@ import { FUniver } from '@univerjs/core/lib/facade'
 import { FormulaResultStatus, RegisterOtherFormulaService } from '@univerjs/engine-formula'
 import {
   INTERCEPTOR_POINT,
+  REF_SELECTIONS_ENABLED,
+  SELECTIONS_ENABLED,
   SheetInterceptorService,
   SheetsSelectionsService,
 } from '@univerjs/sheets'
+import { IEditorService } from '@univerjs/docs-ui'
+import { IEditorBridgeService, SetCellEditVisibleOperation } from '@univerjs/sheets-ui'
+import { SheetsHyperLinkPopupService } from '@univerjs/sheets-hyper-link-ui'
+import { ICanvasPopupService, IContextMenuService, IDialogService } from '@univerjs/ui'
 import {
   OpenConditionalFormattingOperator,
   UniverSheetsConditionalFormattingPreset,
@@ -116,12 +131,14 @@ export interface SheetSelectionState {
 export type ExcelViewPreferences = Pick<ExcelViewState, 'highlightMode'>
 
 export interface ExcelUniverAdapter extends SheetEditorHandle {
+  setActive(active: boolean): void
   setTheme(theme: ExcelHostConfig['theme']): void
   dispose(): void
 }
 
 /** One mounted Univer unit is the authority for this Session document's live content. */
 export function mountExcelUniverAdapter(options: {
+  active?: boolean
   container: HTMLElement
   config: ExcelHostConfig
   documentId: string
@@ -132,7 +149,10 @@ export function mountExcelUniverAdapter(options: {
   onSelectionChange: (selection: SheetSelectionState) => void
   onViewStateChange: (state: ExcelViewState) => void
 }): ExcelUniverAdapter {
-  const { container, config, documentId, onActionFailure, onSelectionChange, onViewStateChange } = options
+  const { container, config, documentId, onSelectionChange } = options
+  let active = true
+  const onActionFailure = (cause: unknown) => { if (active) options.onActionFailure(cause) }
+  const onViewStateChange = (state: ExcelViewState) => { if (active) options.onViewStateChange(state) }
   const editorContainer = document.createElement('div')
   editorContainer.className = 'h-full w-full'
   container.appendChild(editorContainer)
@@ -149,6 +169,18 @@ export function mountExcelUniverAdapter(options: {
     theme: defaultTheme,
   })
   univerAPI.createWorkbook(options.snapshot)
+  const injector = univer.__getInjector()
+  const instances = injector.get(IUniverInstanceService)
+  const context = injector.get(IContextService)
+  const selections = injector.get(SheetsSelectionsService)
+  const popups = injector.get(ICanvasPopupService)
+  const contextMenus = injector.get(IContextMenuService)
+  const dialogs = injector.get(IDialogService)
+  const editors = injector.get(IEditorService)
+  const editorBridge = injector.get(IEditorBridgeService)
+  const commands = injector.get(ICommandService)
+  const hyperlinks = injector.get(SheetsHyperLinkPopupService)
+  let retainedSelection: { sheetId: string; selections: ReturnType<SheetsSelectionsService['getCurrentSelections']> } | null = null
   let formulaPreviewDepth = 0
   const binding = createExcelEditorBinding<IWorkbookData>({
     sessionId: config.sessionId,
@@ -183,7 +215,7 @@ export function mountExcelUniverAdapter(options: {
   const liveAnalysis = createLiveAnalysisController(univerAPI, config.locale, onActionFailure)
   const sheetView = new SheetViewController(univer, univerAPI, options.viewPreferences, onViewStateChange, binding.publishChange)
   const publishSelection = () => {
-    if (!lease.isCurrent()) return
+    if (!active || !lease.isCurrent()) return
     const workbook = univerAPI.getActiveWorkbook()
     const sheet = workbook?.getActiveSheet()
     const range = workbook?.getActiveRange() ?? sheet?.getRange('A1')
@@ -201,10 +233,23 @@ export function mountExcelUniverAdapter(options: {
   }
   // The facade delays SelectionChanged until Univer's Steady lifecycle stage.
   // Listen to the selection model so the formula bar also follows early input.
-  const selectionSubscription = univer.__getInjector().get(SheetsSelectionsService)
-    .selectionChanged$.subscribe(publishSelection)
+  const selectionSubscription = selections.selectionChanged$.subscribe(publishSelection)
+  // Native plugins can finish initialization or schedule floating UI after a tab
+  // is hidden. Keep those events from reclaiming focus or leaving visible portals.
+  const focusSubscription = instances.focused$.subscribe((unitId) => {
+    if (!active && unitId !== null) instances.focusUnit(null)
+  })
+  const popupSubscription = popups.popups$.subscribe((items) => {
+    if (!active && items.length > 0) popups.removeAll()
+  })
+  const dialogSubscription = dialogs.getDialogs$().subscribe((items) => {
+    if (!active && items.length > 0) dialogs.closeAll()
+  })
   const subscriptions = [
     { dispose: () => selectionSubscription.unsubscribe() },
+    { dispose: () => focusSubscription.unsubscribe() },
+    { dispose: () => popupSubscription.unsubscribe() },
+    { dispose: () => dialogSubscription.unsubscribe() },
     univerAPI.addEvent(univerAPI.Event.ActiveSheetChanged, publishSelection),
     univerAPI.addEvent(univerAPI.Event.SheetZoomChanged, () => {
       sheetView.publish()
@@ -222,13 +267,61 @@ export function mountExcelUniverAdapter(options: {
     }),
   ]
   const observer = new ResizeObserver(() => {
-    if (lease.isCurrent()) univerAPI.getActiveWorkbook()?.getActiveSheet()?.refreshCanvas()
+    if (active && lease.isCurrent()) univerAPI.getActiveWorkbook()?.getActiveSheet()?.refreshCanvas()
   })
   observer.observe(container)
   queueMicrotask(publishSelection)
 
+  const assertActive = () => {
+    lease.assertCurrent()
+    if (!active) throw new OfficeOperationError('document_not_ready', 'The workbook editor is not active.')
+  }
+  const setActive = (nextActive: boolean) => {
+    lease.assertCurrent()
+    if (active === nextActive) return
+    active = nextActive
+    const workbook = univerAPI.getActiveWorkbook()
+    const unitId = workbook?.getId()
+    if (!nextActive) {
+      const sheetId = workbook?.getActiveSheet()?.getSheetId()
+      if (sheetId) {
+        retainedSelection = { sheetId, selections: structuredClone(selections.getCurrentSelections()) }
+        // Clear the model and rendered ranges together; resize must not resurrect
+        // a hidden selection. Restore this tab's cached selection on activation.
+        selections.setSelections([])
+      }
+      const visible = editorBridge.isVisible()
+      if (visible.visible) commands.syncExecuteCommand(SetCellEditVisibleOperation.id, { ...visible, visible: false })
+      editorBridge.disableForceKeepVisible()
+      editors.blur(true)
+      hyperlinks.setIsKeepVisible(false)
+      hyperlinks.hideCurrentPopup(undefined, true)
+      hyperlinks.endEditing()
+      popups.removeAll()
+      contextMenus.hideContextMenu()
+      contextMenus.disable()
+      dialogs.closeAll()
+      const focused = window.document.activeElement
+      if (focused instanceof HTMLElement && container.contains(focused)) focused.blur()
+      for (const key of [EDITOR_ACTIVATED, FOCUSING_COMMON_DRAWINGS, FOCUSING_EDITOR_STANDALONE, FOCUSING_FX_BAR_EDITOR, FOCUSING_UNIVER_EDITOR, REF_SELECTIONS_ENABLED]) context.setContextValue(key, false)
+    } else {
+      contextMenus.enable()
+    }
+    context.setContextValue(SELECTIONS_ENABLED, nextActive)
+    instances.focusUnit(nextActive ? unitId ?? null : null)
+    context.setContextValue(FOCUSING_SHEET, nextActive)
+    if (nextActive) {
+      if (unitId && retainedSelection) selections.setSelections(unitId, retainedSelection.sheetId, [...retainedSelection.selections])
+      workbook?.getActiveSheet()?.refreshCanvas()
+      publishSelection()
+      sheetView.publish()
+    }
+  }
+  setActive(options.active ?? true)
+
   return {
     documentId,
+    setActive,
     dispose: binding.dispose,
     flush: binding.flush,
     snapshot: binding.readSnapshot,
@@ -238,30 +331,30 @@ export function mountExcelUniverAdapter(options: {
       sheetView.publish()
     },
     insertContext(expandDataRegion) {
-      lease.assertCurrent()
+      assertActive()
       return insertContext(univerAPI, expandDataRegion)
     },
     previewFormula(sheetId, address, formula) {
-      if (!lease.isCurrent()) return Promise.resolve({ errorCode: '#REF!' })
+      if (!active || !lease.isCurrent()) return Promise.resolve({ errorCode: '#REF!' })
       formulaPreviewDepth += 1
       return calculateFormulaPreview(univer, univerAPI, sheetId, address, formula, lease.isCurrent).then((result) => (
-        lease.isCurrent() ? result : { errorCode: '#REF!' }
+        active && lease.isCurrent() ? result : { errorCode: '#REF!' }
       )).finally(() => {
         window.setTimeout(() => { formulaPreviewDepth = Math.max(0, formulaPreviewDepth - 1) }, 0)
       })
     },
     run(action, value) {
-      return runSheetAction(univerAPI, action, value, liveAnalysis, sheetView, lease.assertCurrent)
+      return runSheetAction(univerAPI, action, value, liveAnalysis, sheetView, assertActive)
     },
     selectRange(address) {
-      lease.assertCurrent()
+      assertActive()
       const sheet = univerAPI.getActiveWorkbook()?.getActiveSheet()
       if (!sheet) throw new OfficeOperationError('document_not_ready', 'The workbook editor is not ready.')
       if (!address) throw new OfficeOperationError('invalid_operation', 'A range address is required.')
       sheet.setActiveRange(sheet.getRange(address))
     },
     setFormulaAt(sheetId, address, formula) {
-      lease.assertCurrent()
+      assertActive()
       const sheet = univerAPI.getActiveWorkbook()?.getSheetBySheetId(sheetId)
       if (!sheet) throw new OfficeOperationError('document_not_found', 'The requested worksheet is unavailable.')
       const selected = sheet.getRange(address)
@@ -271,7 +364,7 @@ export function mountExcelUniverAdapter(options: {
       sheet.setActiveRange(target)
     },
     setFormulaBarValue(value) {
-      lease.assertCurrent()
+      assertActive()
       const workbook = univerAPI.getActiveWorkbook()
       const sheet = workbook?.getActiveSheet()
       if (!workbook || !sheet) throw new OfficeOperationError('document_not_ready', 'The workbook editor is not ready.')

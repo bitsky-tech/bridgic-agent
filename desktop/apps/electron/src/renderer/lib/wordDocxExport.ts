@@ -4,6 +4,7 @@ import type { WordDocumentState } from './wordDomain'
 import { writeOfficeRoundTrip } from './office/officeRoundTrip'
 import { prepareWordHtmlImages, prepareWordSnapshotImages } from './wordImages'
 import type { WordHtmlSection } from './wordUniverModel'
+import { getSnapshotShowPageNumbers } from './wordUniverModel'
 
 const W = 'http://schemas.openxmlformats.org/wordprocessingml/2006/main'
 const R = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships'
@@ -203,6 +204,7 @@ export async function exportWordDocx(document: WordDocumentState): Promise<Uint8
     return paragraphs()
   }
   const style = document.snapshot.documentStyle
+  const showPageNumbers = getSnapshotShowPageNumbers(document.snapshot)
   const exportedParts = new Map<string, string>()
   const sectionXml = (config: Partial<IDocumentStyle & ISectionBreak & WordHtmlSection['style']>, ordinal: number): string => {
     const current = { ...style, ...config }
@@ -217,7 +219,7 @@ export async function exportWordDocx(document: WordDocumentState): Promise<Uint8
         const emptyOverride = ordinal > 0 && segmentId === '' && Object.keys(values ?? {}).length > 0
         const fallback = type === 'default' && segmentId === undefined && !variants.some(([, id]) => id) ? Object.values(values ?? {})[0] : undefined
         const part = segmentId ? values?.[segmentId] : fallback
-        if (!part?.body && !emptyOverride && !(type === 'default' && kind === 'footer' && document.headerFooter.showPageNumbers)) continue
+        if (!part?.body && !emptyOverride && !(type === 'default' && kind === 'footer' && showPageNumbers)) continue
         const key = `${kind}:${segmentId || (emptyOverride ? 'empty' : 'fallback')}`
         let id = exportedParts.get(key)
         if (!id) {
@@ -227,7 +229,7 @@ export async function exportWordDocx(document: WordDocumentState): Promise<Uint8
           while (secondaryParts.includes(name)) name = `${base}-${suffix++}`
           id = relation(kind, `${name}.xml`)
           exportedParts.set(key, id)
-          zip.file(`word/${name}.xml`, documentXml((part?.body ? bodyXml(part.body) : '<w:p/>') + (kind === 'footer' && document.headerFooter.showPageNumbers ? '<w:p><w:fldSimple w:instr="PAGE"><w:r><w:t>1</w:t></w:r></w:fldSimple></w:p>' : ''), kind === 'header' ? 'hdr' : 'ftr'))
+          zip.file(`word/${name}.xml`, documentXml((part?.body ? bodyXml(part.body) : '<w:p/>') + (kind === 'footer' && showPageNumbers ? '<w:p><w:fldSimple w:instr="PAGE"><w:r><w:t>1</w:t></w:r></w:fldSimple></w:p>' : ''), kind === 'header' ? 'hdr' : 'ftr'))
           secondaryParts.push(name)
           contentTypes.push(`<Override PartName="/word/${name}.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.${kind}+xml"/>`)
         }

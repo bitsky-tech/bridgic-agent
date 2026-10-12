@@ -16,7 +16,7 @@ GlobalRegistrator.register({ url: 'http://localhost/' })
 const { act, createRef, StrictMode } = await import('react')
 const { createRoot } = await import('react-dom/client')
 type MountOptions = Parameters<typeof import('../excelUniverAdapter')['mountExcelUniverAdapter']>[0]
-const mounts: Array<{ options: MountOptions; adapter: ExcelUniverAdapter }> = []
+const mounts: Array<{ options: MountOptions; adapter: ExcelUniverAdapter; active: boolean }> = []
 let nativeSnapshot = { id: 'native-initial' } as IWorkbookData
 let finalSnapshot: IWorkbookData | null = null
 let flushFailure: Error | null = null
@@ -24,11 +24,13 @@ let flushFailure: Error | null = null
 mock.module('../excelUniverAdapter', () => ({
   univerLocale: (config: ExcelHostConfig) => config.locale === 'zh-CN' ? LocaleType.ZH_CN : LocaleType.EN_US,
   mountExcelUniverAdapter(options: MountOptions): ExcelUniverAdapter {
+    const mounted = { options, active: options.active ?? true, adapter: null as unknown as ExcelUniverAdapter }
     const adapter: ExcelUniverAdapter = {
       documentId: options.documentId,
-      dispose: mock(() => { if (finalSnapshot) options.onChange(finalSnapshot) }),
+      dispose: mock(() => { mounted.active = false; if (finalSnapshot) options.onChange(finalSnapshot) }),
       flush: mock(async () => { if (flushFailure) throw flushFailure }),
       snapshot: () => nativeSnapshot,
+      setActive: mock((active: boolean) => { mounted.active = active }),
       setTheme: mock(() => undefined),
       insertContext: () => null,
       previewFormula: async () => ({ value: '1' }),
@@ -37,10 +39,12 @@ mock.module('../excelUniverAdapter', () => ({
       setFormulaAt: () => undefined,
       setFormulaBarValue: () => undefined,
     }
-    mounts.push({ options, adapter })
+    mounted.adapter = adapter
+    mounts.push(mounted)
     return adapter
   },
 }))
+const activeMount = () => mounts.findLast((mounted) => mounted.active)
 const { UniverSheetEditor } = await import('../UniverSheetEditor')
 const { ExcelHostApp } = await import('../ExcelHostApp')
 const workbookImport = await import('../../lib/excelWorkbookImport')
@@ -51,6 +55,7 @@ function fakeIndexedDb() {
   const records = new Map<IDBValidKey, unknown>()
   let hasStore = false
   let writeFailure: Error | null = null
+  let afterWrite: ((value: unknown) => void) | null = null
   const database = {
     close: () => undefined,
     createObjectStore: () => { hasStore = true },
@@ -81,6 +86,7 @@ function fakeIndexedDb() {
                 return
               }
               records.set(key, saved)
+              afterWrite?.(saved)
               transaction.oncomplete?.()
             })
           },
@@ -100,7 +106,7 @@ function fakeIndexedDb() {
       return request
     },
   }
-  return { records, factory: factory as unknown as IDBFactory, failWrites: (error: Error | null) => { writeFailure = error } }
+  return { records, factory: factory as unknown as IDBFactory, failWrites: (error: Error | null) => { writeFailure = error }, onWrite: (effect: ((value: unknown) => void) | null) => { afterWrite = effect } }
 }
 
 const originalIndexedDb = Object.getOwnPropertyDescriptor(window, 'indexedDB')
@@ -170,6 +176,63 @@ async function mountHost(initialWorkbook: 'empty' | 'blank', workspace: ExcelWor
 }
 
 describe('Excel routed workbook imports', () => {
+  it('shares canonical source reuse between file requests and public opens while retaining native tab histories', async () => {
+    const importing = spyOn(workbookImport, 'importExcelWorkbook').mockResolvedValue(createEmptyWorkbook(LocaleType.EN_US, 'On disk'))
+    const source = { path: '/session/Report.xlsx', mtimeMs: 42 }
+    const save = mock(async () => ({ ok: true as const, source, fileName: 'Report.xlsx' }))
+    window.officeFiles = {
+      prepare: async (_kind, path) => ({ path: path.includes('Other') ? '/session/Other.xlsx' : source.path, mtimeMs: 42 }),
+      inspect: async (_kind, path) => ({ path, mtimeMs: 42 }),
+      readBase64: async () => 'AQ==', save, confirmClose: async () => 'cancel',
+    }
+    const app = await mountHost('empty')
+    const read = app.api.openRequestedWorkbook
+    app.api.openRequestedWorkbook = async (id) => {
+      const result = await read(id)
+      if (!result.canceled) result.document.source = { path: '/external/Report.xlsx', mtimeMs: 42 }
+      return result
+    }
+    try {
+      await app.open('first')
+      await waitFor(() => activeMount() !== undefined)
+      const original = activeMount()!
+      const firstId = original.options.documentId
+      expect(await window.__bridgicExcel!.dispatch({ type: 'document.activate' })).toMatchObject({ ok: false, error: { code: 'invalid_document_id' } })
+      expect(await window.__bridgicExcel!.dispatch({ type: 'document.open', sourcePath: '/session/Other.xlsx', documentId: firstId })).toMatchObject({ ok: false, error: { code: 'source_conflict' } })
+      expect(importing).toHaveBeenCalledTimes(1)
+      await act(async () => original.options.onChange(createEmptyWorkbook(LocaleType.EN_US, 'Unsaved first workbook')))
+      await act(async () => {
+        expect(await window.__bridgicExcel!.dispatch({ type: 'document.open', sourcePath: '/session/Report.xlsx' })).toMatchObject({ ok: true })
+      })
+      expect(activeMount()).toBe(original)
+      expect(importing).toHaveBeenCalledTimes(1)
+      expect(original.adapter.dispose).not.toHaveBeenCalled()
+      await act(async () => {
+        expect(await window.__bridgicExcel!.dispatch({ type: 'document.open', sourcePath: '/session/Other.xlsx' })).toMatchObject({ ok: true })
+      })
+      await waitFor(() => activeMount()?.options.documentId !== firstId)
+      const other = activeMount()!
+      expect(original.adapter.setActive).toHaveBeenCalledWith(false)
+      expect(original.adapter.dispose).not.toHaveBeenCalled()
+      await act(async () => original.options.onChange(createEmptyWorkbook(LocaleType.EN_US, 'Accepted first native edit')))
+      await app.open('repeat-while-inactive')
+      await waitFor(() => activeMount() === original)
+      await act(async () => { await window.__bridgicExcel!.flush() })
+      expect(app.host.querySelectorAll('[data-testid="excel-document-tab"]')).toHaveLength(2)
+      expect(importing).toHaveBeenCalledTimes(2)
+      expect(app.recovery()!.tabs.find((tab) => tab.tabId === firstId)).toMatchObject({ dirty: true, snapshot: { name: 'Accepted first native edit' } })
+      expect(app.recovery()!.tabs.find((tab) => tab.tabId === other.options.documentId)).toMatchObject({ dirty: false, snapshot: { name: 'On disk' } })
+      expect(other.adapter.setActive).toHaveBeenCalledWith(false)
+      expect(other.adapter.dispose).not.toHaveBeenCalled()
+      expect(save).not.toHaveBeenCalled()
+      await act(async () => {
+        expect(await window.__bridgicExcel!.dispatch({ type: 'document.open', sourcePath: '/external/Report.xlsx' })).toMatchObject({ ok: true })
+      })
+      expect(activeMount()).toBe(original)
+      expect(importing).toHaveBeenCalledTimes(2)
+    } finally { await app.close(); importing.mockRestore() }
+  })
+
   it('reports the authoritative empty and populated workbook inventory to the shell', async () => {
     const app = await mountHost('empty')
     try {
@@ -198,14 +261,15 @@ describe('Excel routed workbook imports', () => {
       expect(importing).toHaveBeenCalledTimes(1)
       expect(app.host.querySelectorAll('[data-testid="excel-document-tab"]')).toHaveLength(1)
 
-      await act(async () => mounts.at(-1)!.options.onChange(createEmptyWorkbook(LocaleType.EN_US, 'User edits')))
+      await act(async () => activeMount()!.options.onChange(createEmptyWorkbook(LocaleType.EN_US, 'User edits')))
       await app.open('other-path-same-name')
       await waitFor(() => app.host.querySelectorAll('[data-testid="excel-document-tab"]').length === 2)
       await app.open('repeat-after-other-file')
       await waitFor(() => app.host.querySelectorAll('[data-testid="excel-document-tab"]')[0]?.getAttribute('aria-selected') === 'true')
       expect(importing).toHaveBeenCalledTimes(2)
       expect(app.host.querySelectorAll('[data-testid="excel-document-tab"]')).toHaveLength(2)
-      expect(mounts.at(-1)!.options.snapshot.name).toBe('User edits')
+      await act(async () => { await window.__bridgicExcel!.flush() })
+      expect(app.recovery()!.tabs.find((tab) => tab.tabId === activeMount()!.options.documentId)!.snapshot.name).toBe('User edits')
       expect(app.host.querySelector('[data-testid="excel-document-tab"] [aria-label]')).not.toBeNull()
     } finally {
       await app.close()
@@ -240,7 +304,7 @@ describe('Excel routed workbook imports', () => {
     try {
       await app.open('first')
       await waitFor(() => mounts.length > 0)
-      const original = mounts.at(-1)!
+      const original = activeMount()!
       const read = app.api.openRequestedWorkbook
       app.api.openRequestedWorkbook = async (id) => {
         const result = await read(id)
@@ -249,9 +313,9 @@ describe('Excel routed workbook imports', () => {
       }
       original.adapter.dispose = mock(() => original.options.onChange(createEmptyWorkbook(LocaleType.EN_US, 'Stale native snapshot')))
       await app.open('updated')
-      await waitFor(() => mounts.at(-1)!.options.snapshot.name === 'External update')
+      await waitFor(() => activeMount()!.options.snapshot.name === 'External update')
       expect(app.host.querySelectorAll('[data-testid="excel-document-tab"]')).toHaveLength(1)
-      expect(mounts.at(-1)!.options.documentId).toBe(original.options.documentId)
+      expect(activeMount()!.options.documentId).toBe(original.options.documentId)
       await waitFor(() => app.recovery()?.tabs[0]?.mtimeMs === 99)
       expect(app.recovery()!.tabs[0]).toMatchObject({ dirty: false, snapshot: { name: 'External update' } })
       await app.open('unchanged-again')
@@ -268,7 +332,7 @@ describe('Excel routed workbook imports', () => {
     try {
       await app.open('first')
       await waitFor(() => mounts.length > 0)
-      const mounted = mounts.at(-1)!
+      const mounted = activeMount()!
       const draft = createEmptyWorkbook(LocaleType.EN_US, 'Pending cell edit')
       mounted.adapter.flush = mock(async () => { mounted.options.onChange(draft) })
       const read = app.api.openRequestedWorkbook
@@ -306,7 +370,7 @@ describe('Excel routed workbook imports', () => {
       }
       await app.open('external-update')
       await waitFor(() => importing.mock.calls.length === 2)
-      await act(async () => mounts.at(-1)!.options.onChange(createEmptyWorkbook(LocaleType.EN_US, 'Typed during import')))
+      await act(async () => activeMount()!.options.onChange(createEmptyWorkbook(LocaleType.EN_US, 'Typed during import')))
       await act(async () => finish(createEmptyWorkbook(LocaleType.EN_US, 'External update')))
       await waitFor(() => app.host.querySelector('[role="alert"]') !== null)
       await waitFor(() => app.recovery()?.tabs[0]?.snapshot.name === 'Typed during import')
@@ -325,10 +389,10 @@ describe('Excel routed workbook imports', () => {
     try {
       await app.open('first')
       await waitFor(() => mounts.length > 0)
-      if (dirty) await act(async () => mounts.at(-1)!.options.onChange(createEmptyWorkbook(LocaleType.EN_US, 'Unsaved A')))
+      if (dirty) await act(async () => activeMount()!.options.onChange(createEmptyWorkbook(LocaleType.EN_US, 'Unsaved A')))
       await app.open('other-file')
       await waitFor(() => app.host.querySelectorAll('[data-testid="excel-document-tab"]').length === 2)
-      const savedTabId = mounts.at(-1)!.options.documentId
+      const savedTabId = activeMount()!.options.documentId
       nativeSnapshot = createEmptyWorkbook(LocaleType.EN_US, 'Saved B')
       app.api.saveAs = mock(async () => ({ ok: true as const, documentId: 'report-file', fileName: 'Report.xlsx', mtimeMs: 99 }))
       await act(async () => { await window.__bridgicExcel!.dispatch({ type: 'document.saveAs' }) })
@@ -342,7 +406,7 @@ describe('Excel routed workbook imports', () => {
         expect(Array.from(app.host.querySelectorAll('[role="status"]')).some((element) => element.textContent?.includes('different file'))).toBe(true)
         const draftTab = app.host.querySelector<HTMLButtonElement>('[data-testid="excel-document-tab"]')!
         await act(async () => draftTab.click())
-        await waitFor(() => mounts.at(-1)!.options.documentId === retained.tabId)
+        await waitFor(() => activeMount()!.options.documentId === retained.tabId)
         nativeSnapshot = createEmptyWorkbook(LocaleType.EN_US, 'Unsaved A')
         const save = mock(async () => ({ ok: false as const, reason: 'canceled' as const }))
         const saveAs = mock(async () => ({ ok: false as const, reason: 'canceled' as const }))
@@ -359,9 +423,9 @@ describe('Excel routed workbook imports', () => {
         return result
       }
       await app.open('reopen-saved-file')
-      await waitFor(() => mounts.at(-1)!.options.documentId === savedTabId)
+      await waitFor(() => activeMount()!.options.documentId === savedTabId)
       expect(importing).toHaveBeenCalledTimes(2)
-      expect(mounts.at(-1)!.options.snapshot.name).toBe('Saved B')
+      expect(activeMount()!.options.snapshot.name).toBe('Saved B')
     } finally {
       await app.close()
       importing.mockRestore()
@@ -379,7 +443,7 @@ describe('Excel routed workbook imports', () => {
     try {
       await waitFor(() => mounts.length > 0)
       const edited = createEmptyWorkbook(LocaleType.EN_US, 'Retained edit')
-      await act(async () => mounts.at(-1)!.options.onChange(edited))
+      await act(async () => activeMount()!.options.onChange(edited))
       await act(async () => app.host.querySelector<HTMLButtonElement>('[data-testid="excel-new-document"]')!.click())
       await waitFor(() => app.host.querySelectorAll('[data-testid="excel-document-tab"]').length === 2)
       await act(async () => app.host.querySelector<HTMLButtonElement>('[data-testid="excel-document-tab"]')!.click())
@@ -414,12 +478,12 @@ describe('Excel routed workbook imports', () => {
     try {
       await app.open('first')
       await waitFor(() => mounts.length > 0)
-      const stableTabId = mounts.at(-1)!.options.documentId
+      const stableTabId = activeMount()!.options.documentId
       const edited = { ...imported, name: 'Retained edit' }
       const sheetId = edited.sheetOrder[0]!
       edited.sheets[sheetId]!.cellData = { 0: { 0: { v: 'Retained A1' } } }
       nativeSnapshot = edited
-      await act(async () => mounts.at(-1)!.options.onChange(edited))
+      await act(async () => activeMount()!.options.onChange(edited))
       await app.open('repeat-one')
       await app.open('repeat-two')
       await waitFor(() => app.reads.length === 3)
@@ -433,11 +497,11 @@ describe('Excel routed workbook imports', () => {
       await app.close()
       app = await mountHost('empty')
       addSource(app)
-      await waitFor(() => mounts.at(-1)!.options.snapshot.name === 'Retained edit')
+      await waitFor(() => activeMount()!.options.snapshot.name === 'Retained edit')
       await app.open('repeat-after-reload')
       await waitFor(() => app.reads.length === 1)
       await act(async () => { await window.__bridgicExcel!.flush() })
-      expect(mounts.at(-1)!.options.documentId).toBe(stableTabId)
+      expect(activeMount()!.options.documentId).toBe(stableTabId)
       expect(importing).toHaveBeenCalledTimes(1)
       expect(app.host.querySelectorAll('[data-testid="excel-document-tab"]')).toHaveLength(1)
       expect(app.recovery()!.tabs[0]!.snapshot.name).toBe('Retained edit')
@@ -467,9 +531,9 @@ describe('Excel routed workbook imports', () => {
     try {
       await app.open('first')
       await waitFor(() => mounts.length > 0)
-      const stableTabId = mounts.at(-1)!.options.documentId
+      const stableTabId = activeMount()!.options.documentId
       nativeSnapshot = createEmptyWorkbook(LocaleType.EN_US, 'Edited workbook')
-      await act(async () => mounts.at(-1)!.options.onChange(nativeSnapshot))
+      await act(async () => activeMount()!.options.onChange(nativeSnapshot))
       await act(async () => { expect(await window.__bridgicExcel!.dispatch({ type: 'document.save' })).toMatchObject({ ok: true }) })
       expect(save).toHaveBeenCalledTimes(1)
       expect(save.mock.calls[0]![0]).toMatchObject({ documentId: stableTabId, saveAs: false, source: { path: '/session/Report.xlsx' } })
@@ -481,7 +545,7 @@ describe('Excel routed workbook imports', () => {
       await app.open('reopen-exported')
       await waitFor(() => app.reads.length === 2)
       expect(importing).toHaveBeenCalledTimes(1)
-      expect(mounts.at(-1)!.options.documentId).toBe(stableTabId)
+      expect(activeMount()!.options.documentId).toBe(stableTabId)
     } finally { await app.close(); importing.mockRestore() }
   })
 
@@ -528,7 +592,7 @@ describe('Excel routed workbook imports', () => {
       if (editBeforeExport) {
         nativeSnapshot = structuredClone(nativeSnapshot)
         nativeSnapshot.sheets[sheetId]!.cellData![0]![0]!.v = 'Exported A1'
-        await act(async () => mounts.at(-1)!.options.onChange(nativeSnapshot))
+        await act(async () => activeMount()!.options.onChange(nativeSnapshot))
       }
       await act(async () => {
         expect(await window.__bridgicExcel!.dispatch({ type: 'document.saveAs' })).toMatchObject({
@@ -561,7 +625,7 @@ describe('Excel routed workbook imports', () => {
 
       nativeSnapshot = structuredClone(nativeSnapshot)
       nativeSnapshot.sheets[sheetId]!.cellData![0]![0]!.v = 'Later copy edit'
-      await act(async () => mounts.at(-1)!.options.onChange(nativeSnapshot))
+      await act(async () => activeMount()!.options.onChange(nativeSnapshot))
       await act(async () => window.dispatchEvent(new KeyboardEvent('keydown', { key: 's', ctrlKey: true })))
       await act(async () => { await window.__bridgicExcel!.flush() })
       expect(save).toHaveBeenCalledTimes(3)
@@ -615,7 +679,7 @@ describe('Excel routed workbook imports', () => {
         nativeSnapshot = structuredClone(nativeSnapshot)
         const sheetId = nativeSnapshot.sheetOrder[0]!
         nativeSnapshot.sheets[sheetId]!.cellData = { 0: { 0: { v: 'Edited copy' } } }
-        await act(async () => mounts.at(-1)!.options.onChange(nativeSnapshot))
+        await act(async () => activeMount()!.options.onChange(nativeSnapshot))
         await act(async () => window.dispatchEvent(new KeyboardEvent('keydown', { key: 's', [modifier]: true })))
         await act(async () => { await window.__bridgicExcel!.flush() })
         const copiedWorkbook = await importXlsx(new Uint8Array(await readFile(copy.path)), LocaleType.EN_US)
@@ -658,7 +722,7 @@ describe('Excel routed workbook imports', () => {
       const app = await mountHost('empty', workspace)
       try {
         await waitFor(() => mounts.length > 0)
-        const mounted = mounts.at(-1)!
+        const mounted = activeMount()!
         const mountCount = mounts.length
         await act(async () => window.dispatchEvent(new KeyboardEvent('keydown', { key: 'S', [modifier]: true, shiftKey: true })))
         await waitFor(() => save.mock.calls.length === 1)
@@ -732,7 +796,7 @@ describe('Excel routed workbook imports', () => {
     const app = await mountHost('empty', workspace)
     try {
       await waitFor(() => mounts.length > 0)
-      const mounted = mounts.at(-1)!
+      const mounted = activeMount()!
       const mountCount = mounts.length
       const exporting = window.__bridgicExcel!.dispatch({ type: 'document.saveAs' })
       await waitFor(() => save.mock.calls.length === 1)
@@ -767,7 +831,7 @@ describe('Excel routed workbook imports', () => {
     try {
       await waitFor(() => mounts.length > 0)
       nativeSnapshot = createEmptyWorkbook(LocaleType.EN_US, 'Retained after export failure')
-      await act(async () => mounts.at(-1)!.options.onChange(nativeSnapshot))
+      await act(async () => activeMount()!.options.onChange(nativeSnapshot))
       await act(async () => { expect(await window.__bridgicExcel!.dispatch({ type: 'document.save' })).toMatchObject({ ok: false, error: { message: expect.stringContaining('disk full') } }) })
       await act(async () => { await window.__bridgicExcel!.flush() })
       expect(save).toHaveBeenCalledTimes(1)
@@ -790,7 +854,7 @@ describe('Excel routed workbook imports', () => {
       await waitFor(() => mounts.length > 0)
       await act(async () => { await window.__bridgicExcel!.flush() })
       nativeSnapshot = createEmptyWorkbook(LocaleType.EN_US, 'Exported workbook')
-      await act(async () => mounts.at(-1)!.options.onChange(nativeSnapshot))
+      await act(async () => activeMount()!.options.onChange(nativeSnapshot))
       indexed.failWrites(new Error('workspace disk full'))
       await act(async () => {
         expect(await window.__bridgicExcel!.dispatch({ type: 'document.save' })).toMatchObject({ ok: false, error: { message: expect.stringContaining('workspace disk full') } })
@@ -823,7 +887,7 @@ describe('Excel routed workbook imports', () => {
           sheetTransform: { from: { row: 0, column: 0 }, to: { row: 1, column: 1 } },
         } },
       }) }]
-      await act(async () => mounts.at(-1)!.options.onChange(nativeSnapshot))
+      await act(async () => activeMount()!.options.onChange(nativeSnapshot))
       await act(async () => { await window.__bridgicExcel!.flush() })
       expect(app.recovery()!.tabs[0]!.snapshot.resources).toEqual(nativeSnapshot.resources)
       await act(async () => { expect(await window.__bridgicExcel!.dispatch({ type: 'document.save' })).toMatchObject({ ok: false, error: { message: expect.stringContaining('Use an embedded') } }) })
@@ -838,7 +902,7 @@ describe('Excel routed workbook imports', () => {
     const app = await mountHost('blank')
     try {
       await waitFor(() => mounts.length > 0)
-      const editor = mounts.at(-1)!
+      const editor = activeMount()!
       let forcedCommits = 0
       editor.adapter.flush = mock(async () => { forcedCommits++ })
       const edited = createEmptyWorkbook(LocaleType.EN_US, 'Accepted cell edit')
@@ -864,7 +928,7 @@ describe('Excel routed workbook imports', () => {
       await waitFor(() => mounts.length > 0)
       await act(async () => { await window.__bridgicExcel!.flush() })
       const latest = createEmptyWorkbook(LocaleType.EN_US, 'Edit accepted just before reload')
-      await act(async () => mounts.at(-1)!.options.onChange(latest))
+      await act(async () => activeMount()!.options.onChange(latest))
       expect(app.recovery()!.tabs[0]!.snapshot.name).not.toBe(latest.name)
       await act(async () => window.dispatchEvent(new Event('pagehide')))
       await waitFor(() => app.recovery()?.tabs[0]?.snapshot.name === latest.name)
@@ -901,6 +965,85 @@ describe('Excel routed workbook imports', () => {
 afterAll(async () => { await GlobalRegistrator.unregister() })
 
 describe('Excel native editor React lifecycle', () => {
+  it('retains a hidden native driver, isolates its callbacks, and restores the original handle on activation', async () => {
+    const host = document.createElement('div')
+    document.body.appendChild(host)
+    const root = createRoot(host)
+    const ref = createRef<SheetEditorHandle>()
+    const onChange = mock(() => undefined)
+    const onActionFailure = mock(() => undefined)
+    const onSelectionChange = mock(() => undefined)
+    const onViewStateChange = mock(() => undefined)
+    const props = {
+      config: { sessionId: 'session', locale: 'en-US' as const, theme: 'light' as const },
+      documentId: 'retained-tab', snapshot: nativeSnapshot,
+      viewPreferences: { highlightMode: 'none' as const },
+      onChange, onActionFailure, onSelectionChange, onViewStateChange,
+    }
+    const selection = { address: 'B2', sheetId: 'sheet', sheetName: 'Sheet', targetAddress: 'B2', value: 'Retained value' }
+    const view = { darkMode: false, gridlines: true, highlightMode: 'none' as const, showZeros: true, zoom: 1 }
+    try {
+      await act(async () => root.render(<UniverSheetEditor {...props} active={false} ref={ref} />))
+      expect(mounts).toHaveLength(0)
+      await act(async () => root.render(<UniverSheetEditor {...props} active ref={ref} />))
+      const original = activeMount()!
+      const handle = ref.current!
+      await handle.run('undo')
+      await act(async () => root.render(<UniverSheetEditor {...props} active={false} ref={ref} />))
+      expect(original.adapter.setActive).toHaveBeenCalledWith(false)
+      expect(original.adapter.dispose).not.toHaveBeenCalled()
+      expect(ref.current).toBe(handle)
+      await expect(handle.run('undo')).rejects.toThrow('not active')
+      original.options.onSelectionChange(selection)
+      original.options.onViewStateChange(view)
+      original.options.onActionFailure(new Error('Hidden editor'))
+      original.options.onChange(nativeSnapshot)
+      expect(onSelectionChange).not.toHaveBeenCalled()
+      expect(onViewStateChange).not.toHaveBeenCalled()
+      expect(onActionFailure).not.toHaveBeenCalled()
+      expect(onChange).toHaveBeenCalledWith(nativeSnapshot)
+      await handle.flush()
+      await act(async () => root.render(<UniverSheetEditor {...props} active ref={ref} />))
+      expect(mounts).toHaveLength(1)
+      expect(original.adapter.setActive).toHaveBeenCalledWith(true)
+      await handle.run('redo')
+      original.options.onSelectionChange(selection)
+      original.options.onViewStateChange(view)
+      expect(onSelectionChange).toHaveBeenCalledWith(selection)
+      expect(onViewStateChange).toHaveBeenCalledWith(view)
+    } finally {
+      await act(async () => root.unmount())
+      host.remove()
+    }
+  })
+
+  it('updates callbacks without replacing the native driver or calling a stale owner', async () => {
+    const host = document.createElement('div')
+    document.body.appendChild(host)
+    const root = createRoot(host)
+    const oldChange = mock(() => undefined)
+    const newChange = mock(() => undefined)
+    const props = {
+      config: { sessionId: 'session', locale: 'en-US' as const, theme: 'light' as const },
+      documentId: 'retained-callbacks', snapshot: nativeSnapshot,
+      viewPreferences: { highlightMode: 'none' as const },
+      onActionFailure: () => undefined, onSelectionChange: () => undefined, onViewStateChange: () => undefined,
+    }
+    try {
+      await act(async () => root.render(<UniverSheetEditor {...props} onChange={oldChange} />))
+      const original = activeMount()!
+      await act(async () => root.render(<UniverSheetEditor {...props} onChange={newChange} onSelectionChange={() => undefined} onViewStateChange={() => undefined} onActionFailure={() => undefined} />))
+      original.options.onChange(nativeSnapshot)
+      expect(mounts).toHaveLength(1)
+      expect(original.adapter.dispose).not.toHaveBeenCalled()
+      expect(oldChange).not.toHaveBeenCalled()
+      expect(newChange).toHaveBeenCalledWith(nativeSnapshot)
+    } finally {
+      await act(async () => root.unmount())
+      host.remove()
+    }
+  })
+
   it('keeps the mounted native driver and handle during snapshot and theme updates', async () => {
     const host = document.createElement('div')
     document.body.appendChild(host)
@@ -967,6 +1110,43 @@ describe('Excel native editor React lifecycle', () => {
 
 
 describe('Excel close protection', () => {
+  it('restores the retained native tab and durable draft when the final flush fails after an empty checkpoint is written', async () => {
+    window.officeFiles = {
+      prepare: async (_kind, path) => ({ path, mtimeMs: 42 }),
+      inspect: async (_kind, path) => ({ path, mtimeMs: 42 }),
+      save: async () => ({ ok: false, reason: 'canceled' }),
+      confirmClose: async () => 'discard',
+    }
+    const app = await mountHost('blank')
+    const requestClose = mock(async () => undefined)
+    app.api.requestClose = requestClose
+    try {
+      await waitFor(() => activeMount() !== undefined)
+      const original = activeMount()!
+      const tabId = original.options.documentId
+      await act(async () => original.options.onChange(createEmptyWorkbook(LocaleType.EN_US, 'Retained after final native failure')))
+      await act(async () => { await window.__bridgicExcel!.flush() })
+      let sawEmptyCheckpoint = false
+      indexed.onWrite((value) => {
+        if ((value as ExcelWorkspaceState<IWorkbookData>).tabs.length !== 0) return
+        sawEmptyCheckpoint = true
+        flushFailure = new Error('Final native flush failed')
+      })
+      await act(async () => { await window.__bridgicExcel!.close() })
+      await waitFor(() => app.host.textContent?.includes('Final native flush failed') === true)
+      expect(sawEmptyCheckpoint).toBe(true)
+      expect(app.host.querySelectorAll('[data-testid="excel-document-tab"]')).toHaveLength(1)
+      expect(activeMount()).toBe(original)
+      expect(original.adapter.dispose).not.toHaveBeenCalled()
+      expect(app.recovery()!.tabs[0]).toMatchObject({ tabId, dirty: true, snapshot: { name: 'Retained after final native failure' } })
+      expect(requestClose).not.toHaveBeenCalled()
+    } finally {
+      indexed.onWrite(null)
+      flushFailure = null
+      await app.close()
+    }
+  })
+
   for (const closeTarget of ['last-tab', 'workspace'] as const) {
     it(`retains live tabs and their checkpoint when storage fails while closing ${closeTarget}`, async () => {
       const source = { path: '/session/Workbook.xlsx', mtimeMs: 42 }
@@ -981,7 +1161,7 @@ describe('Excel close protection', () => {
       try {
         await waitFor(() => mounts.length > 0)
         const edited = createEmptyWorkbook(LocaleType.EN_US, 'Draft kept on failed close')
-        await act(async () => mounts.at(-1)!.options.onChange(edited))
+        await act(async () => activeMount()!.options.onChange(edited))
         await act(async () => { await window.__bridgicExcel!.flush() })
         const originalTabId = app.recovery()!.tabs[0]!.tabId
         indexed.failWrites(new Error('workspace disk full'))
@@ -1022,7 +1202,7 @@ describe('Excel close protection', () => {
       try {
         await app.open('first')
         await waitFor(() => mounts.length > 0)
-        await act(async () => mounts.at(-1)!.options.onChange(createEmptyWorkbook(LocaleType.EN_US, 'Unsaved input')))
+        await act(async () => activeMount()!.options.onChange(createEmptyWorkbook(LocaleType.EN_US, 'Unsaved input')))
         await app.open('other-second')
         await waitFor(() => app.host.querySelectorAll('[data-testid="excel-document-tab"]').length === 2)
         window.officeFiles = {
