@@ -262,7 +262,7 @@ async def test_builtin_protocol(service_client: httpx.AsyncClient) -> None:
 
 
 async def test_codex_activation_clears_api_key_routing(service_client, service_app, monkeypatch) -> None:
-    """Switching an OpenAI channel to Codex removes its stale API endpoint."""
+    """Codex activation seeds current subscription models and clears API-key routing."""
     response = await service_client.post(
         "/me/providers",
         json={
@@ -282,13 +282,31 @@ async def test_codex_activation_clears_api_key_routing(service_client, service_a
     codex = next(provider for provider in providers if provider["id"] == "openai")
     assert codex["protocol"] == "openai-codex"
     assert codex["base_url"] is None
+    assert {
+        "gpt-6.1-sol", "gpt-6-astra", "gpt-6-sol", "gpt-6-luna",
+        "gpt-5.6-terra", "gpt-5.6-sol", "gpt-5.6-luna",
+    } <= set(codex["available_models"])
+    assert not {"gpt-5.5", "gpt-5.4", "gpt-5.4-mini", "gpt-5.3-codex-spark"} & set(codex["available_models"])
+    user = (await service_client.get("/me")).json()
+    assert user["current_model"] == "gpt-6.1-sol"
+
+    response = await service_client.post(
+        "/me/providers/fetch-models",
+        json={"provider_id": "openai", "protocol": "openai-codex", "api_key": ""},
+    )
+    assert response.status_code == 200
+    fetched = response.json()
+    assert fetched["ok"] is True
+    assert [model["id"] for model in fetched["models"]] == codex["available_models"]
 
     response = await service_client.post(
         "/me/active-model",
-        json={"provider_id": "openai", "model": "gpt-5.5"},
+        json={"provider_id": "openai", "model": "gpt-6-astra"},
     )
     assert response.status_code == 200
-    assert (await service_client.get("/me")).json()["base_url"] is None
+    user = (await service_client.get("/me")).json()
+    assert user["base_url"] is None
+    assert user["current_model"] == "gpt-6-astra"
 
 
 async def test_active_model(service_client: httpx.AsyncClient) -> None:
