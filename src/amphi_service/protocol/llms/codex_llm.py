@@ -7,7 +7,7 @@ drive it — this adapter does, mirroring the shape of ``anthropic_llm.py`` so t
 agent's protocol-dispatching ``thinking()`` loop can branch on
 ``self._llm.protocol == "openai-codex"`` and reach the inner ``async_client``.
 
-The contract uses model ``gpt-5.4``, requires ``stream: true``, and sends
+The contract requires ``stream: true`` and sends
 headers ``chatgpt-account-id`` +
 ``OpenAI-Beta: responses=experimental``.
 """
@@ -55,13 +55,12 @@ CredentialProvider = Callable[..., Optional[CodexCreds]]
 
 # ChatGPT-subscription Codex backend. The Responses path is derived from this.
 DEFAULT_CODEX_BASE_URL = "https://chatgpt.com/backend-api/codex"
-# Codex model availability is PER ACCOUNT (one account exposes gpt-5.4, another
-# gpt-5.5 + gpt-5.4-mini; all *-codex suffixes 400). Models are user-managed,
-# exactly like every API-key channel: activation seeds this single default and
-# the user edits the channel's model list in the GUI. Auto-probing the account
+# Codex model availability depends on the account and workspace. Activation
+# seeds the static catalog below and selects this default; the user can edit
+# the channel's model list in the GUI. Auto-probing the account
 # was removed — it fired 7 cross-border requests inside the oauth/status call
 # and routinely blew the renderer's 30s timeout on a slow/blocked network.
-DEFAULT_CODEX_MODEL = "gpt-5.5"
+DEFAULT_CODEX_MODEL = "gpt-6.1-sol"
 
 # Static Codex model catalog — the subscription backend has NO list-models
 # endpoint (that's why the removed auto-probe had to POST one request per
@@ -73,13 +72,13 @@ DEFAULT_CODEX_MODEL = "gpt-5.5"
 #   2. Per-account availability (see above) is NOT reflected; a listed model
 #      may still 400 for a given account. The failure surfaces on first chat.
 CODEX_CATALOG_MODELS: List[Dict[str, str]] = [
+    {"id": "gpt-6.1-sol", "name": "GPT-6.1 Sol"},
+    {"id": "gpt-6-astra", "name": "GPT-6 Astra"},
+    {"id": "gpt-6-sol", "name": "GPT-6 Sol"},
+    {"id": "gpt-6-luna", "name": "GPT-6 Luna"},
     {"id": "gpt-5.6-terra", "name": "GPT-5.6 Terra"},
     {"id": "gpt-5.6-sol", "name": "GPT-5.6 Sol"},
     {"id": "gpt-5.6-luna", "name": "GPT-5.6 Luna"},
-    {"id": "gpt-5.5", "name": "GPT-5.5"},
-    {"id": "gpt-5.4", "name": "GPT-5.4"},
-    {"id": "gpt-5.4-mini", "name": "GPT-5.4 Mini"},
-    {"id": "gpt-5.3-codex-spark", "name": "GPT-5.3 Codex Spark"},
 ]
 
 _DEFAULT_TIMEOUT = 600.0
